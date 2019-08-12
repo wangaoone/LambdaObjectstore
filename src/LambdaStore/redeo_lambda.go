@@ -41,6 +41,7 @@ var (
 	dataDepository = make([]*types.DataEntry, 0, 100)
 	dataDeposited sync.WaitGroup
 	timeout = lambdaTimeout.New(0)
+	tokens  = make(chan struct{}, 1)
 
 	active  int32
 	done    chan struct{}
@@ -98,12 +99,14 @@ func HandleRequest(ctx context.Context, input prototol.InputEvent) error {
 		log.Info("Connection to %v established (%v)", lambdaConn.RemoteAddr(), timeout.Since())
 
 		isFirst = false
-		go func() {
-			srv.Serve_client(lambdaConn)
-		}()
 	} else {
 		timeout.ResetWithExtension(lambdaTimeout.TICK_ERROR_EXTEND)
+		tokens <- struct{}{}
+		// start serve
+		clear.Add(1)
+		go srv.ServeForeignClient(lambdaConn, tokens, &clear)
 	}
+
 	// append PONG back to proxy on being triggered
 	pongHandler(lambdaConn)
 
