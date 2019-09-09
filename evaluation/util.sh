@@ -50,7 +50,7 @@ function updateTimeOut() {
     NAME=$1
     TIME=$2
     echo "updating lambda store timeout"
-    go run $PWD/../../sbin/deploy_function.go -config=true -prefix=$NAME -timeout=$1
+    go run $PWD/../sbin/deploy_function.go -config=true -prefix=$NAME -timeout=$TIME
 
 }
 
@@ -58,5 +58,5 @@ function updateMem() {
     NAME=$1
     MEM=$2
     echo "updating lambda store mem"
-    go run $PWD/../../sbin/deploy_function.go -config=true -prefix=$NAME -mem=$MEM
+    go run $PWD/../sbin/deploy_function.go -config=true -prefix=$NAME -mem=$MEM
 }

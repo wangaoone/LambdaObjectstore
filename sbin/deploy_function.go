@@ -199,7 +199,6 @@ func main() {
 	flag.Parse()
 	// get group count
 	group := int64(math.Ceil(float64(*to-*from) / float64(*batch)))
-	fmt.Println("group", group)
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		SharedConfigState: session.SharedConfigEnable,
 	}))
