@@ -9,14 +9,9 @@ function update_lambda_timeout() {
     NAME=$1
     TIME=$2
     echo "updating lambda store timeout"
-#    for i in {0..13}
     for i in {0..63}
     do
-#            aws lambda update-function-code --function-name $prefix$i --zip-file fileb://Lambda2SmallJPG.zip
-#            aws lambda update-function-configuration --function-name $prefix$i --memory-size $mem
         aws lambda update-function-configuration --function-name $NAME$i --timeout $TIME
-#            aws lambda update-function-configuration --function-name $prefix$name$i --handler redeo_lambda
-#            aws lambda put-function-concurrency --function-name $name$i --reserved-concurrent-executions $concurrency
     done
 }
 
@@ -24,14 +19,9 @@ function update_lambda_mem() {
     NAME=$1
     MEM=$2
     echo "updating lambda store mem"
-#    for i in {0..13}
     for i in {0..63}
     do
-#            aws lambda update-function-code --function-name $prefix$i --zip-file fileb://Lambda2SmallJPG.zip
             aws lambda update-function-configuration --function-name $NAME$i --memory-size $MEM
-#        aws lambda update-function-configuration --function-name $NAME$i --timeout $TIME
-#            aws lambda update-function-configuration --function-name $prefix$name$i --handler redeo_lambda
-#            aws lambda put-function-concurrency --function-name $name$i --reserved-concurrent-executions $concurrency
     done
 }
 
@@ -54,4 +44,19 @@ function bench() {
     FILE=$9
     go run $REDBENCH/bench.go -addrlist localhost:6378 -n $N -c $C -keymin $KEYMIN -keymax $KEYMAX \
     -sz $SZ -d $D -p $P -op $OP -file $FILE -dec -i 1000
+}
+
+function updateTimeOut() {
+    NAME=$1
+    TIME=$2
+    echo "updating lambda store timeout"
+    go run $PWD/../../sbin/deploy_function.go -config=true -prefix=$NAME -timeout=$1
+
+}
+
+function updateMem() {
+    NAME=$1
+    MEM=$2
+    echo "updating lambda store mem"
+    go run $PWD/../../sbin/deploy_function.go -config=true -prefix=$NAME -mem=$MEM
 }

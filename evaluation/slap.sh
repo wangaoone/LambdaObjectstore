@@ -7,7 +7,7 @@ fi
 PWD=`dirname $0`
 ENTRY=`date "+%Y%m%d%H%M"`
 ENTRY="/data/$ENTRY"
-NODE_PREFIX="Node"
+NODE_PREFIX="Proxy2Node"
 
 source $PWD/util.sh
 
@@ -29,7 +29,8 @@ function perform(){
         PRESET=$PWD/$ENTRY/No.$i"_"$DATA"_"$PARITY"_"lambda$MEM"_"$SZ"_SET"
         PREGET=$PWD/$ENTRY/No.$i"_"$DATA"_"$PARITY"_"lambda$MEM"_"$SZ"_GET"
 
-        update_lambda_timeout $NODE_PREFIX $((TIME+i*10))
+        updateTimeOut $NODE_PREFIX $((TIME+i*10))
+#        update_lambda_timeout $NODE_PREFIX $((TIME+i*10))
 #        wait
         start_proxy $PREPROXY &
         while [ ! -f /tmp/lambdaproxy.pid ]
@@ -68,7 +69,8 @@ fi
 mkdir -p $PWD/$ENTRY
 for mem in {0..6}
 do
-    update_lambda_mem $NODE_PREFIX ${MEMSET[mem]}
+#    update_lambda_mem $NODE_PREFIX ${MEMSET[mem]}
+    updateMem $NODE_PREFIX ${MEMSET[mem]}
     for sz in {0..5}
     do
         for k in {0..4}
