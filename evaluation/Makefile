@@ -5,13 +5,18 @@ deploy:
 microbench:
 	./slap.sh 1>./log 2>&1 &
 
-dryrun:
+
+build-simulator:
+	go build $(GOPATH)/src/github.com/wangaoone/redbench/simulator/playback/
+	mv playback $(GOPATH)/src/github.com/wangaoone/redbench/simulator/playback/
+
+dryrun: build-simulator
 	./playback.sh ~/project/src/github.com/wangaoone/LambdaObjectstore/evaluation/dal09_10mb_50h.csv 400 0.1 -compact dryrun
 
-simulate:
+simulate: build-simulator
 	./playback.sh ~/project/src/github.com/wangaoone/LambdaObjectstore/evaluation/dal09_10mb_50h.csv 400 0.1 -compact 1>./log 2>&1 &
 
-playback:
+playback: build-simulator
 	./playback.sh ~/project/src/github.com/wangaoone/LambdaObjectstore/evaluation/dal09_10mb_50h.csv 400 0.1 1>./log 2>&1 &
 
 start-server:
