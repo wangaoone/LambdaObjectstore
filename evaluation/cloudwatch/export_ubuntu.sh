@@ -1,7 +1,7 @@
 #!/bin/bash
 LAMBDA="/aws/lambda/"
 FILE="log/"
-LOG_PREFIX="Store1VPCNode"
+LOG_PREFIX="Proxy2Node"
 
 PREFIX=$1
 start=$2
@@ -42,6 +42,6 @@ do
   fi
 
   echo "exporting $LAMBDA$LOG_PREFIX$i"
-  aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i
+  aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "ao.cloudwatch" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i
   sleep 2s
 done
