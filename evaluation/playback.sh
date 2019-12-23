@@ -37,7 +37,7 @@ function perform(){
 	done
 }
 
-function dryrun(){
+function dryPerform(){
 	FILE=$1
 	CLUSTER=$2
 	SCALE=$3
@@ -47,7 +47,7 @@ function dryrun(){
 }
 
 if [ "$5" == "dryrun" ]; then
-    dryrun $1 $2 $3 $4
+    dryPerform $1 $2 $3 $4
 else
     mkdir -p $PWD/$ENTRY
 
