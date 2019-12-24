@@ -11,7 +11,7 @@ import (
 
 // ErrServerClosed is returned by the Server after a call to Shutdown or Close.
 var ErrServerClosed = errors.New("migrator: Server closed")
-var ListenTimeout = 30 * time.Second
+var ListenTimeout = 120 * time.Second
 var all = &hashmap.HashMap{}
 
 type Server struct {
