@@ -5,6 +5,7 @@ deploy:
 microbench:
 	./slap.sh 1>./log 2>&1 &
 
+<<<<<<< HEAD
 
 build-simulator:
 	go build $(GOPATH)/src/github.com/wangaoone/redbench/simulator/playback/
@@ -18,6 +19,20 @@ simulate: build-simulator
 
 playback: build-simulator
 	./playback.sh ~/project/src/github.com/wangaoone/LambdaObjectstore/evaluation/dal09_10mb_50h.csv 400 0.1 1>./log 2>&1 &
+=======
+build-simulator:
+	go build $(GOPATH)/src/github.com/wangaoone/redbench/simulator/playback/
+	mv playback $(GOPATH)/src/github.com/wangaoone/redbench/simulator/playback/
+
+simulate: build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 0.1 -compact dryrun
+
+simulate: build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 0.1 -compact 1>./log 2>&1 &
+
+playback: build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 0.1 1>./log 2>&1 &
+>>>>>>> efbbbe652e20ff9a3a1dda95f9c25e51182dbecb
 
 start-server:
 	./server.sh 1>./log 2>&1 &
