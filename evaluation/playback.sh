@@ -39,30 +39,6 @@ function perform(){
 	done
 }
 
-<<<<<<< HEAD
-function dryPerform(){
-	FILE=$1
-	CLUSTER=$2
-	SCALE=$3
-	COMPACT=$4
-
-	dryrun 10 2 $SCALE $CLUSTER $FILE $COMPACT
-}
-
-if [ "$5" == "dryrun" ]; then
-    dryPerform $1 $2 $3 $4
-else
-    mkdir -p $PWD/$ENTRY
-
-    START=`date +"%Y-%m-%d %H:%M:%S"`
-    perform $1 $2 $3 $4
-    mv $PWD/log $PWD/$ENTRY.log
-    END=`date +"%Y-%m-%d %H:%M:%S"`
-
-    echo "Transfering logs from CloudWatch to S3: $START - $END ..."
-    cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
-fi
-=======
 function dry_perform(){
 	FILE=$1
 	CLUSTER=$2
@@ -87,4 +63,3 @@ else
 	echo "Transfering logs from CloudWatch to S3: $START - $END ..."
 	cloudwatch/export_ubuntu.sh $DATE/ "$START" "$END"
 fi
->>>>>>> efbbbe652e20ff9a3a1dda95f9c25e51182dbecb

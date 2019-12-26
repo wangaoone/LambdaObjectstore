@@ -79,19 +79,6 @@ do
       break
     fi
 
-<<<<<<< HEAD
-  # Abandon
-  if [ "$RUNNING" != "" ]; then
-    echo "Detect running task and wait timeout, killing task \"$RUNNING\"..."
-    aws logs --profile CWLExportUser cancel-export-task --task-id \"$RUNNING\"
-    echo "Done"
-  fi
-
-  echo "exporting $LAMBDA$LOG_PREFIX$i"
-  aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "ao.cloudwatch" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i
-  sleep 2s
-done
-=======
     # Wait another 30 seconds for the abandon procedure
     for j in {0..15}
     do
@@ -105,4 +92,3 @@ done
     done
   done
 done
->>>>>>> efbbbe652e20ff9a3a1dda95f9c25e51182dbecb
