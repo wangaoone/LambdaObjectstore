@@ -2,7 +2,6 @@ package types
 
 import (
 	"errors"
-	"github.com/wangaoone/LambdaObjectstore/src/proxy"
 	"github.com/wangaoone/redeo/resp"
 	"strconv"
 	"sync/atomic"
@@ -20,7 +19,7 @@ type Request struct {
 	Body         []byte
 	BodyStream   resp.AllReadCloser
 	ChanResponse chan interface{}
-	Meta         *proxy.Meta
+	ChunkSize         int64
 
 	w                *resp.RequestWriter
 	responded        uint32

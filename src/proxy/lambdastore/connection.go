@@ -333,7 +333,7 @@ func (conn *Connection) setHandler(start time.Time) {
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
 	req, ok := conn.SetResponse(rsp)
 	if ok {
-		conn.instance.Meta.Size += uint64(req.Meta.ChunkSize)
+		conn.instance.Meta.Size += uint64(req.ChunkSize)
 	}
 
 	if err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0)); err != nil {
