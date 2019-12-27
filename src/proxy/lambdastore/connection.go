@@ -334,6 +334,10 @@ func (conn *Connection) setHandler(start time.Time) {
 	req, ok := conn.SetResponse(rsp)
 	if ok {
 		conn.instance.Meta.Size += uint64(req.ChunkSize)
+
+		size := conn.instance.Meta.Size
+		capacity := conn.instance.Meta.Capacity
+		conn.log.Debug(fmt.Sprintf("In Set, size is %d, capacity is %d", size, capacity))
 	}
 
 	if err := collector.Collect(collector.LogProxy, rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0)); err != nil {

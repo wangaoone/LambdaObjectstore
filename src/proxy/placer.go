@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"github.com/wangaoone/LambdaObjectstore/lib/logger"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,15 +14,15 @@ const (
 
 type PlacerMeta struct {
 	// Object management properties
-	pos         [2]int        // Positions on both primary and secondary array.
-	visited     bool
-	visitedAt   time.Time
-	confirmed   []bool
-	swapMap     Placement     // For decision from LRU
-	evicts      *Meta
-	suggestMap  Placement     // For decision from balancer
-	once        *sync.Once
-	action      MetaDoPostProcess
+	pos        [2]int // Positions on both primary and secondary array.
+	visited    bool
+	visitedAt  time.Time
+	confirmed  []bool
+	swapMap    Placement // For decision from LRU
+	evicts     *Meta
+	suggestMap Placement // For decision from balancer
+	once       *sync.Once
+	action     MetaDoPostProcess
 }
 
 func (pm *PlacerMeta) postProcess(action MetaDoPostProcess) {
@@ -54,8 +55,8 @@ type Placer struct {
 
 func NewPlacer(store *MetaStore, group *Group) *Placer {
 	placer := &Placer{
-		store: store,
-		group: group,
+		store:     store,
+		group:     group,
 		secondary: 1,
 	}
 	placer.objects[0] = make([]*Meta, 1, INIT_LRU_CAPACITY)
@@ -105,7 +106,7 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 
 	assigned := meta.slice.GetIndex(lambdaId)
 	instance := p.group.Instance(assigned)
-	if instance.Meta.Size + uint64(meta.ChunkSize) < instance.Meta.Capacity {
+	if instance.Meta.Size+uint64(meta.ChunkSize) < instance.Meta.Capacity {
 		meta.Placement[chunk] = assigned
 		meta.placerMeta.confirmed[chunk] = true
 		if meta.placerMeta.pos[p.primary] == 0 {
@@ -122,7 +123,10 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 	}
 
 	// Try find a replacement
-	for !p.NextAvailableObject(meta) {}
+	for !p.NextAvailableObject(meta) {
+		p.dumpPlacer()
+		p.dumpPlacer(true)
+	}
 	p.log.Debug(fmt.Sprintf("meta key is: %s, chunk is %d, evicted, evicted key: %s, placement: %v", meta.Key, chunk, meta.placerMeta.evicts.Key, meta.placerMeta.evicts.Placement))
 	meta.Placement[chunk] = meta.placerMeta.swapMap[chunk]
 	meta.placerMeta.confirmed[chunk] = true
@@ -178,7 +182,7 @@ func (p *Placer) NextAvailableObject(meta *Meta) bool {
 	// Position 0 is reserved, cursor iterates from 1
 	if p.cursor == 0 {
 		if p.objects[p.secondary] == nil || cap(p.objects[p.secondary]) < len(p.objects[p.primary]) {
-			p.objects[p.secondary] = make([]*Meta, 1, 2 * len(p.objects[p.primary]))
+			p.objects[p.secondary] = make([]*Meta, 1, 2*len(p.objects[p.primary]))
 		} else {
 			p.objects[p.secondary] = p.objects[p.secondary][:1] // Alwarys append from the 2nd position.
 		}
@@ -202,7 +206,7 @@ func (p *Placer) NextAvailableObject(meta *Meta) bool {
 			meta.placerMeta.swapMap = copyPlacement(meta.placerMeta.swapMap, m.Placement)
 			meta.placerMeta.evicts = m
 
-			p.objects[p.primary][meta.placerMeta.pos[p.primary]] = nil  // unset old position
+			p.objects[p.primary][meta.placerMeta.pos[p.primary]] = nil // unset old position
 			meta.placerMeta.pos[p.primary] = p.cursor
 			p.objects[p.primary][p.cursor] = meta // replace
 			m = meta
@@ -229,4 +233,33 @@ func (p *Placer) NextAvailableObject(meta *Meta) bool {
 	}
 
 	return found
+}
+
+func (p *Placer) dumpPlacer(args ...bool) string {
+	if len(args) > 0 && args[0] {
+		return p.dump(p.objects[p.secondary])
+	} else {
+		return p.dump(p.objects[p.primary])
+	}
+}
+
+func (p *Placer) dump(metas []*Meta) string {
+	if metas == nil || len(metas) < 1 {
+		return ""
+	}
+
+	elem := make([]string, len(metas)-1)
+	for i, meta := range metas[1:] {
+		if meta == nil {
+			elem[i] = "nil"
+			continue
+		}
+
+		visited := 0
+		if meta.placerMeta.visited {
+			visited = 1
+		}
+		elem[i] = fmt.Sprintf("%s-%d", meta.Key, visited)
+	}
+	return strings.Join(elem, ",")
 }

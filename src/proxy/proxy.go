@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"fmt"
 	"github.com/cornelk/hashmap"
 	"github.com/google/uuid"
 
@@ -149,7 +150,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		Key:          chunkKey,
 		BodyStream:   bodyStream,
 		ChanResponse: client.Responses(),
-		ChunkSize:         bodyStream.Len(),
+		ChunkSize:    bodyStream.Len(),
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
 }
@@ -249,5 +250,10 @@ func (p *Proxy) dropEvicted(meta *Meta) {
 			},
 		}
 		p.group.Instance(lambdaId).Meta.Size -= uint64(meta.ChunkSize)
+
+		size := p.group.Instance(lambdaId).Meta.Size
+		capacity := p.group.Instance(lambdaId).Meta.Capacity
+		p.log.Debug(fmt.Sprintf("In Evicted, size is %d, capacity is %d", size, capacity))
 	}
 }
+
