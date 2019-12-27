@@ -18,12 +18,14 @@ var (
 	BaseMigratorPort = 6380
 	ServerIp         string
 	Prefix           string
+	Vpc              bool
 )
 
 func init() {
 	Log = logger.NilLogger
 
-	ip, err := GetPrivateIp()
+	//ip, err := GetPrivateIp()
+	ip, err := GetIP(Vpc)
 	if err != nil {
 		panic(err)
 	}

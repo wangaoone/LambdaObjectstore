@@ -17,10 +17,11 @@ import (
 )
 
 var (
-	replica       = flag.Bool("replica", false, "Enable lambda replica deployment")
-	isPrint       = flag.Bool("isPrint", false, "Enable log printing")
-	prefix        = flag.String("prefix", "log", "log file prefix")
-	log           = &logger.ColorLogger{
+	replica = flag.Bool("replica", false, "Enable lambda replica deployment")
+	isPrint = flag.Bool("isPrint", false, "Enable log printing")
+	prefix  = flag.String("prefix", "log", "log file prefix")
+	vpc     = flag.Bool("w/o VPC", false, "Enable VPC")
+	log     = &logger.ColorLogger{
 		Level: logger.LOG_LEVEL_WARN,
 	}
 	lambdaLis net.Listener
@@ -29,6 +30,8 @@ var (
 
 func init() {
 	global.Log = log
+	global.Vpc = *vpc
+
 }
 
 func main() {

@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"fmt"
+	"github.com/wangaoone/LambdaObjectstore/lib/logger"
 	"sync"
 	"time"
 )
@@ -40,13 +42,14 @@ func (pm *PlacerMeta) doPostProcess() {
 // eviction of another object (older). In this case, we evict the older in whole based on Clock LRU algorithm, and set the
 // original position of the newer to nil, which a compact operation is needed later. We use a secondary array for online compact.
 type Placer struct {
-	store       *MetaStore
-	group       *Group
-	objects     [2][]*Meta   // We use a secondary array for online compact, the first element is reserved.
-	cursor      int          // Cursor of primary array that indicate where the LRU checks.
-	primary     int
-	secondary   int
-	mu          sync.RWMutex
+	log       logger.ILogger
+	store     *MetaStore
+	group     *Group
+	objects   [2][]*Meta // We use a secondary array for online compact, the first element is reserved.
+	cursor    int        // Cursor of primary array that indicate where the LRU checks.
+	primary   int
+	secondary int
+	mu        sync.RWMutex
 }
 
 func NewPlacer(store *MetaStore, group *Group) *Placer {
@@ -120,7 +123,7 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 
 	// Try find a replacement
 	for !p.NextAvailableObject(meta) {}
-
+	p.log.Debug(fmt.Sprintf("meta key is: %s, chunk is %d, evicted, evicted key: %s, placement: %v", meta.Key, chunk, meta.placerMeta.evicts.Key, meta.placerMeta.evicts.Placement))
 	meta.Placement[chunk] = meta.placerMeta.swapMap[chunk]
 	meta.placerMeta.confirmed[chunk] = true
 	meta.placerMeta.once = &sync.Once{}
