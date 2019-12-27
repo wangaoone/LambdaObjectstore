@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	BUCKET = "ao.lambda.code"
-	ROLE   = "arn:aws:iam::037862857942:role/ProxyNoVPC"
+	//BUCKET = "ao.lambda.code"
+	//ROLE   = "arn:aws:iam::037862857942:role/ProxyNoVPC"
+	BUCKET = "ao.code.lambda"
+	ROLE   = "arn:aws:iam::270268338604:role/lambda"
 )
 
 var (
@@ -27,7 +29,7 @@ var (
 	key     = flag.String("key", "redeo_lambda", "key for handler and file name")
 	from    = flag.Int64("from", 0, "the number of lambda deployment involved")
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
-	batch   = flag.Int64("batch", 10, "batch Number, no need to modify")
+	batch   = flag.Int64("batch", 1, "batch Number, no need to modify")
 	mem     = flag.Int64("mem", 256, "the memory of lambda")
 	subnet  = []*string{
 		aws.String("subnet-eeb536c0"),
@@ -206,6 +208,11 @@ func main() {
 		SharedConfigState: session.SharedConfigEnable,
 	}))
 	svc := lambda.New(sess, &aws.Config{Region: aws.String("us-east-1")})
+	if *create {
+		for i := *from; i < *to; i++ {
+			createFunction(fmt.Sprintf("%s%d", *prefix, i), svc)
+		}
+	}
 	if *code {
 		for j := int64(0); j < group; j++ {
 			fmt.Println(j)
@@ -229,11 +236,6 @@ func main() {
 			}
 			wg.Wait()
 			time.Sleep(1 * time.Second)
-		}
-	}
-	if *create {
-		for i := *from; i < *to; i++ {
-			createFunction(fmt.Sprintf("%s%d", *prefix, i), svc)
 		}
 	}
 }

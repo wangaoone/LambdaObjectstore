@@ -25,10 +25,10 @@ func init() {
 	Log = logger.NilLogger
 
 	//ip, err := GetPrivateIp()
-	ip, err := GetIP(Vpc)
-	if err != nil {
-		panic(err)
-	}
+	//ip, err := GetIP(Vpc)
+	//if err != nil {
+	//	panic(err)
+	//}
 
-	ServerIp = ip
+	ServerIp = "3.228.28.69"
 }

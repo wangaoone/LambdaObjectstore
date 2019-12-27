@@ -149,6 +149,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		Key:          chunkKey,
 		BodyStream:   bodyStream,
 		ChanResponse: client.Responses(),
+		Meta:         meta,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
 }
@@ -242,10 +243,12 @@ func (p *Proxy) dropEvicted(meta *Meta) {
 	for i, lambdaId := range meta.Placement {
 		p.group.Instance(lambdaId).C() <- &types.Control{
 			Request: &types.Request{
-				Id:  types.Id{0, reqId, strconv.Itoa(i)},
-				Cmd: "del",
-				Key: meta.ChunkKey(i),
+				Id:   types.Id{0, reqId, strconv.Itoa(i)},
+				Cmd:  "del",
+				Key:  meta.ChunkKey(i),
+				Meta: meta,
 			},
 		}
+		p.group.Instance(lambdaId).Meta.Size -= uint64(meta.ChunkSize)
 	}
 }

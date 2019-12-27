@@ -6,8 +6,8 @@ import (
 	"github.com/wangaoone/LambdaObjectstore/src/proxy/lambdastore"
 )
 
-const LambdaMaxDeployments = 400
-const NumLambdaClusters = 400
+const LambdaMaxDeployments = 10
+const NumLambdaClusters = 10
 const LambdaStoreName = "LambdaStore"
 const LambdaPrefix = "Proxy2Node"
 const InstanceWarmTimout = 10 * time.Minute
