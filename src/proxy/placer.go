@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"github.com/wangaoone/LambdaObjectstore/lib/logger"
+	"github.com/wangaoone/LambdaObjectstore/src/proxy/global"
 	"strings"
 	"sync"
 	"time"
@@ -55,6 +56,11 @@ type Placer struct {
 
 func NewPlacer(store *MetaStore, group *Group) *Placer {
 	placer := &Placer{
+		log: &logger.ColorLogger{
+			Prefix: "Placer ",
+			Level:  global.Log.GetLevel(),
+			Color:  true,
+		},
 		store:     store,
 		group:     group,
 		secondary: 1,
@@ -79,6 +85,7 @@ func (p *Placer) NewMeta(key string, sliceSize int, numChunks int, chunk int, la
 // 4. Remap to smaller "Size" of instance between target instance and remapped instance according to "chunk" in
 //    relocation array.
 func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostProcess) {
+	p.log.Debug("entry")
 	chunk := newMeta.lastChunk
 	lambdaId := newMeta.Placement[chunk]
 
@@ -86,26 +93,32 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 	if got {
 		newMeta.close()
 	}
-
+	p.log.Debug("after got,%s", meta.ChunkKey(chunk))
 	meta.mu.Lock()
 	defer meta.mu.Unlock()
 
 	if meta.placerMeta != nil && meta.placerMeta.confirmed[chunk] {
 		return meta, got, nil
 	}
-
+	p.log.Debug("after check confirm,%s", meta.ChunkKey(chunk))
 	if meta.placerMeta == nil {
 		meta.placerMeta = &PlacerMeta{
 			confirmed: make([]bool, len(meta.Placement)),
 		}
 	}
+	p.log.Debug("before lock1,%s", meta.ChunkKey(chunk))
 
 	// Check availability
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	p.log.Debug("after lock,%s", meta.ChunkKey(chunk))
+
 	assigned := meta.slice.GetIndex(lambdaId)
 	instance := p.group.Instance(assigned)
+
+	p.log.Debug("after get index,%s", meta.ChunkKey(chunk))
+
 	if instance.Meta.Size+uint64(meta.ChunkSize) < instance.Meta.Capacity {
 		meta.Placement[chunk] = assigned
 		meta.placerMeta.confirmed[chunk] = true
@@ -114,6 +127,7 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 		}
 		return meta, got, nil
 	}
+	p.log.Debug("after if,%s", meta.ChunkKey(chunk))
 
 	// Check if a replacement decision has been made.
 	if !IsPlacementEmpty(meta.placerMeta.swapMap) {
@@ -122,10 +136,14 @@ func (p *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool, MetaPostPr
 		return meta, got, nil
 	}
 
+	p.log.Debug("before find replacement,%s", meta.ChunkKey(chunk))
+
+	p.log.Info(p.dumpPlacer())
+
 	// Try find a replacement
 	for !p.NextAvailableObject(meta) {
-		p.dumpPlacer()
-		p.dumpPlacer(true)
+		p.log.Info(p.dumpPlacer())
+		p.log.Info(p.dumpPlacer(true))
 	}
 	p.log.Debug(fmt.Sprintf("meta key is: %s, chunk is %d, evicted, evicted key: %s, placement: %v", meta.Key, chunk, meta.placerMeta.evicts.Key, meta.placerMeta.evicts.Placement))
 	meta.Placement[chunk] = meta.placerMeta.swapMap[chunk]
@@ -167,7 +185,7 @@ func (p *Placer) Get(key string, chunk int) (*Meta, bool) {
 // Object management implementation: Clock LRU
 func (p *Placer) AddObject(meta *Meta) {
 	meta.placerMeta.pos[p.primary] = len(p.objects[p.primary])
-	// meta.placerMeta.visited = false    // For new object in list, visited is set to false to avoid Useless First Round,
+	meta.placerMeta.visited = true    // For new object in list, visited is set to false to avoid Useless First Round,
 	meta.placerMeta.visitedAt = time.Now()
 
 	p.objects[p.primary] = append(p.objects[p.primary], meta)

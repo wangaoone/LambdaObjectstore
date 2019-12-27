@@ -128,6 +128,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	if err := collector.Collect(collector.LogStart, "set", reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
+	p.log.Debug("before placer")
 
 	// We don't use this for now
 	// global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"set", int(dataChunks), int(parityChunks), 0})
@@ -135,6 +136,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	prepared := p.metaStore.NewMeta(
 		key, int(randBase), int(dataChunks+parityChunks), int(dChunkId), int(lambdaId), bodyStream.Len())
+
 	meta, _, postProcess := p.metaStore.GetOrInsert(key, prepared)
 	if postProcess != nil {
 		postProcess(p.dropEvicted)
@@ -242,13 +244,12 @@ func (p *Proxy) CollectData() {
 func (p *Proxy) dropEvicted(meta *Meta) {
 	reqId := uuid.New().String()
 	for i, lambdaId := range meta.Placement {
-		p.group.Instance(lambdaId).C() <- &types.Control{
-			Request: &types.Request{
-				Id:   types.Id{0, reqId, strconv.Itoa(i)},
-				Cmd:  "del",
-				Key:  meta.ChunkKey(i),
-			},
+		p.group.Instance(lambdaId).C() <- &types.Request{
+			Id:  types.Id{0, reqId, strconv.Itoa(i)},
+			Cmd: "del",
+			Key: meta.ChunkKey(i),
 		}
+
 		p.group.Instance(lambdaId).Meta.Size -= uint64(meta.ChunkSize)
 
 		size := p.group.Instance(lambdaId).Meta.Size
@@ -256,4 +257,3 @@ func (p *Proxy) dropEvicted(meta *Meta) {
 		p.log.Debug(fmt.Sprintf("In Evicted, size is %d, capacity is %d", size, capacity))
 	}
 }
-

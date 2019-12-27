@@ -115,6 +115,9 @@ func Collect(handle nanolog.Handle, args ...interface{}) error {
 		logMu.Lock()
 		entry := reqMap[key]
 		logMu.Unlock()
+		if entry == nil {
+			return nil
+		}
 
 		entry.firstByte = args[3].(int64) - entry.start
 		args[3] = entry.firstByte
@@ -127,6 +130,9 @@ func Collect(handle nanolog.Handle, args ...interface{}) error {
 		entry := reqMap[key]
 		//delete(reqMap, key)
 		logMu.Unlock()
+		if entry == nil {
+			return nil
+		}
 
 		entry.server2Client = args[3].(int64)
 		entry.appendBulk = args[4].(int64)
@@ -142,7 +148,9 @@ func Collect(handle nanolog.Handle, args ...interface{}) error {
 		logMu.Lock()
 		entry := reqMap[key]
 		logMu.Unlock()
-
+		if entry == nil {
+			return nil
+		}
 		entry.validate = args[3].(int64)
 		return nil
 	}
