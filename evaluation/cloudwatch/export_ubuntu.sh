@@ -2,6 +2,7 @@
 LAMBDA="/aws/lambda/"
 FILE="log/"
 LOG_PREFIX="Proxy2Node"
+S3="ao.cloudwatch"
 
 PREFIX=$1
 start=$2
@@ -57,7 +58,7 @@ do
   for k in {0..2}
   do
     echo "exporting $LAMBDA$LOG_PREFIX$i"
-    aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i
+    aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination ${S3} --destination-prefix $FILE$PREFIX$LOG_PREFIX$i
     sleep 2s
 
     # Wait for the end the last task
