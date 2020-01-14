@@ -13,10 +13,7 @@ import (
 )
 
 const (
-	//BUCKET = "ao.lambda.code"
-	//ROLE   = "arn:aws:iam::037862857942:role/ProxyNoVPC"
-	BUCKET = "ao.code.lambda"
-	ROLE   = "arn:aws:iam::270268338604:role/lambda"
+	ROLE = "arn:aws:iam::037862857942:role/ProxyNoVPC"
 )
 
 var (
@@ -31,7 +28,9 @@ var (
 	to      = flag.Int64("to", 400, "the number of lambda deployment involved")
 	batch   = flag.Int64("batch", 1, "batch Number, no need to modify")
 	mem     = flag.Int64("mem", 256, "the memory of lambda")
-	subnet  = []*string{
+	bucket  = flag.String("S3", "ao.lambda.code", "S3 bucket for lambda code")
+
+	subnet = []*string{
 		aws.String("subnet-eeb536c0"),
 		//aws.String("subnet-f94739f6"), // public subnet
 		aws.String("subnet-f432faca"),
@@ -93,7 +92,7 @@ func updateConfig(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 func updateCode(name string, svc *lambda.Lambda, wg *sync.WaitGroup) {
 	input := &lambda.UpdateFunctionCodeInput{
 		FunctionName: aws.String(name),
-		S3Bucket:     aws.String(BUCKET),
+		S3Bucket:     aws.String(*bucket),
 		S3Key:        aws.String(fmt.Sprintf("%s.zip", *key)),
 	}
 	result, err := svc.UpdateFunctionCode(input)
@@ -136,7 +135,7 @@ func createFunction(name string, svc *lambda.Lambda) {
 	}
 	input := &lambda.CreateFunctionInput{
 		Code: &lambda.FunctionCode{
-			S3Bucket: aws.String(BUCKET),
+			S3Bucket: aws.String(*bucket),
 			S3Key:    aws.String(fmt.Sprintf("%s.zip", *key)),
 		},
 		FunctionName: aws.String(name),
