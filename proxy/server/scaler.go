@@ -66,8 +66,9 @@ func (s *Scaler) Daemon() {
 			// append tmpGroup to current bucket group
 			bucket.append(tmpGroup)
 
-			// update proxy group FROM cursor
-			atomic.AddInt32(&s.proxy.placer.from, NumLambdaClusters)
+			// add tmp group and update proxy group pointer
+			s.proxy.movingWindow.appendToGroup(tmpGroup)
+			atomic.AddInt32(&s.proxy.placer.pointer, NumLambdaClusters)
 
 			//scale out phase finished
 			s.proxy.placer.scaling = false

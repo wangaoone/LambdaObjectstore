@@ -19,6 +19,9 @@ type MovingWindow struct {
 
 	cursor    int
 	startTime time.Time
+
+	scaler       chan struct{}
+	scaleCounter int32
 }
 
 func NewMovingWindow(window int, interval int) *MovingWindow {
@@ -30,12 +33,15 @@ func NewMovingWindow(window int, interval int) *MovingWindow {
 			Level:  global.Log.GetLevel(),
 			Color:  true,
 		},
-		window:   window,
-		interval: interval,
-		//num:       2, // number of active buckets
+		window:    window,
+		interval:  interval,
 		buckets:   make([]*bucket, 0, 9999),
 		startTime: time.Now(),
 		cursor:    0,
+
+		// for scaling out
+		scaler:       make(chan struct{}, 1),
+		scaleCounter: 0,
 	}
 }
 
@@ -43,35 +49,97 @@ func (mw *MovingWindow) waitReady() {
 	mw.getCurrentBucket().waitReady()
 }
 
+// only assign backup for new node in bucket
+func (mw *MovingWindow) assignBackup(bucket *bucket) {
+	length := len(bucket.group.All)
+
+	for i := length - NumLambdaClusters; i < length; i++ {
+		num, candidates := scheduler.getBackupsForNode(bucket.group, i)
+		node := mw.proxy.group.Instance(int(i))
+		node.AssignBackups(num, candidates)
+	}
+}
+
 func (mw *MovingWindow) start() *Group {
+	// init bucket
 	bucket := newBucket(0)
+
+	// assign backup node for all nodes of this bucket
+	mw.assignBackup(bucket)
+
+	// append to bucket list & append current bucket group to proxy group
+	mw.appendToGroup(bucket.group)
 	mw.buckets = append(mw.buckets, bucket)
-	//mw.proxy.group = mw.getAllGroup()
-	mw.append(bucket)
 
 	return bucket.group
 }
 
-func (mw *MovingWindow) Rolling() {
+func (mw *MovingWindow) Daemon() {
 	idx := 1
 	for {
 		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
 		ticker := time.NewTicker(30 * time.Second)
 		select {
+		// scaling out in bucket
+		case <-mw.scaler:
+
+			// get current bucket
+			bucket := mw.getCurrentBucket()
+
+			tmpGroup := NewGroup(NumLambdaClusters)
+			for i := range tmpGroup.All {
+				node := scheduler.GetForGroup(tmpGroup, i)
+				node.Meta.Capacity = InstanceCapacity
+				node.Meta.IncreaseSize(InstanceOverhead)
+				go func() {
+					node.WarmUp()
+					if atomic.AddInt32(&mw.scaleCounter, 1) == int32(len(tmpGroup.All)) {
+						mw.log.Info("[scale out is ready]")
+					}
+				}()
+				// Begin handle requests
+				go node.HandleRequests()
+			}
+
+			mw.assignBackup(bucket)
+
+			// reset counter
+			mw.scaleCounter = 0
+
+			// append tmpGroup to current bucket group
+			bucket.append(tmpGroup)
+			bucket.rang += NumLambdaClusters
+
+			// append tmnGroup to proxy group
+			mw.appendToGroup(tmpGroup)
+
+			// move pointer after scale out
+			atomic.AddInt32(&mw.proxy.placer.pointer, NumLambdaClusters)
+
+			//scale out phase finished
+			mw.proxy.placer.scaling = false
+			mw.log.Debug("scale out finish")
+
+		// for bucket rolling
 		case <-ticker.C:
-			bucket := newBucket(idx)
-			mw.buckets = append(mw.buckets, bucket)
-			//if len(mw.buckets) > mw.num*2 {
-			//	mw.log.Debug("trim bucket")
-			//	mw.buckets = mw.buckets[1:]
+			//TODO: generate new fake bucket. use the same pointer as last bucket
+			//currentBucket := mw.getCurrentBucket()
+			//if mw.avgSize(currentBucket) < 1000 {
+			//	break
 			//}
-			mw.append(bucket)
-			//mw.proxy.groupAll = mw.getAllGroup()
-			atomic.AddInt32(&mw.proxy.placer.from, NumLambdaClusters)
-			//mw.proxy.placer.from += NumLambdaClusters
+
+			bucket := newBucket(idx)
+			mw.assignBackup(bucket)
+
+			// append to bucket list & append current bucket group to proxy group
+			mw.appendToGroup(bucket.group)
+			mw.buckets = append(mw.buckets, bucket)
+
+			// increase proxy group pointer and sync bucket start index
+			bucket.start = atomic.AddInt32(&mw.proxy.placer.pointer, NumLambdaClusters)
 			mw.cursor = len(mw.buckets) - 1
 
-			mw.log.Debug("current placer from is %v, step is %v", atomic.LoadInt32(&mw.proxy.placer.from), NumLambdaClusters)
+			mw.log.Debug("current placer from is %v, step is %v", atomic.LoadInt32(&mw.proxy.placer.pointer), NumLambdaClusters)
 		}
 		idx += 1
 	}
@@ -104,20 +172,20 @@ func (mw *MovingWindow) getCurrentBucket() *bucket {
 }
 
 // active group means active bucket under N(2) hour window
-func (mw *MovingWindow) getActiveGroup() *Group {
-	res := &Group{
-		All:  make([]*GroupInstance, 0, LambdaMaxDeployments),
-		size: 0,
-	}
-	for _, bucket := range mw.getActiveBucket() {
-		g := bucket.group
-		for i := 0; i < g.Len(); i++ {
-			res.All = append(res.All, g.All[i])
-		}
-	}
-	res.size = len(res.All)
-	return res
-}
+//func (mw *MovingWindow) getActiveGroup() *Group {
+//	res := &Group{
+//		All:  make([]*GroupInstance, 0, LambdaMaxDeployments),
+//		size: 0,
+//	}
+//	for _, bucket := range mw.getActiveBucket() {
+//		g := bucket.group
+//		for i := 0; i < g.Len(); i++ {
+//			res.All = append(res.All, g.All[i])
+//		}
+//	}
+//	res.size = len(res.All)
+//	return res
+//}
 
 //func (mw *MovingWindow) getAllGroup() *Group {
 //	res := &Group{
@@ -136,8 +204,7 @@ func (mw *MovingWindow) getActiveGroup() *Group {
 //	return res
 //}
 
-func (mw *MovingWindow) append(bucket *bucket) {
-	g := bucket.group
+func (mw *MovingWindow) appendToGroup(g *Group) {
 	for i := 0; i < len(g.All); i++ {
 		mw.proxy.group.All = append(mw.proxy.group.All, g.All[i])
 		mw.log.Debug("active instance name %v", g.All[i].Name())
@@ -167,6 +234,17 @@ func (mw *MovingWindow) touch(meta *Meta) {
 
 	meta.placerMeta.bucketIdx = mw.cursor
 	//meta.placerMeta.ts = time.Now().UnixNano()
+}
+
+func (mw *MovingWindow) avgSize(bucket *bucket) int {
+	sum := 0
+	start := bucket.start
+
+	for i := start; i < start+bucket.rang; i++ {
+		sum += int(mw.proxy.group.Instance(int(i)).Meta.Size())
+	}
+
+	return sum / int(bucket.rang)
 }
 
 //func (mw *MovingWindow) updateBucket(meta *Meta, lastChunk int) {
