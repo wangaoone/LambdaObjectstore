@@ -3,6 +3,13 @@ package client
 import (
 	"bytes"
 	"errors"
+	"fmt"
+	"io"
+	"math/rand"
+	"net"
+	"strconv"
+	"sync"
+	"time"
 
 	"github.com/ScottMansfield/nanolog"
 	"github.com/cespare/xxhash"
@@ -10,12 +17,6 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/server"
 	"github.com/mason-leap-lab/redeo/resp"
-	"io"
-	"math/rand"
-	"net"
-	"strconv"
-	"sync"
-	"time"
 )
 
 const (
