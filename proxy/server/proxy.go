@@ -12,6 +12,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
@@ -30,7 +31,7 @@ type Proxy struct {
 
 // initial lambda group
 func New(replica bool) *Proxy {
-	group := NewGroup(NumLambdaClusters) // use Cluster number to initial group
+	group := NewGroup(config.NumLambdaClusters)
 	p := &Proxy{
 		log: &logger.ColorLogger{
 			Prefix: "Proxy ",
@@ -91,15 +92,14 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 
 	// Get args
 	key, _ := c.NextArg().String()
+	reqId, _ := c.NextArg().String()
+	size, _ := c.NextArg().Int()
 	dChunkId, _ := c.NextArg().Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
-	lambdaId, _ := c.NextArg().Int()
-	randBase, _ := c.NextArg().Int()
-	reqId, _ := c.NextArg().String()
-	// _, _ = c.NextArg().Int()
-	// _, _ = c.NextArg().Int()
 	dataChunks, _ := c.NextArg().Int()
 	parityChunks, _ := c.NextArg().Int()
+	lambdaId, _ := c.NextArg().Int()
+	randBase, _ := c.NextArg().Int()
 
 	bodyStream, err := c.Next()
 	if err != nil {
@@ -113,16 +113,16 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
 
-	// We don't use this for now
-	// global.ReqMap.GetOrInsert(reqId, &types.ClientReqCounter{"set", int(dataChunks), int(parityChunks), 0})
-
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
 	prepared := p.placer.NewMeta(
-		key, int(randBase), int(dataChunks+parityChunks), int(dChunkId), int(lambdaId), bodyStream.Len())
+		key, size, dataChunks, parityChunks, dChunkId, int64(bodyStream.Len()), int(lambdaId), int(randBase))
 	//meta, _, postProcess :=  p.metaStore.GetOrInsert(key, prepared)
 	p.log.Debug("key is %v, lambdaId is %v", prepared.Key, lambdaId)
 	// redirect to do load balance
-	meta, _ := p.placer.GetOrInsert(key, prepared)
+	meta, exist := p.placer.GetOrInsert(key, prepared)
+	if exist {
+		meta.close()
+	}
 	//if meta.Deleted {
 	//	// Object may be evicted in some cases:
 	//	// 1: Some chunks were set.
@@ -157,18 +157,14 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	client := redeo.GetClient(c.Context())
 	connId := int(client.ID())
 	key := c.Arg(0).String()
+	reqId := c.Arg(2).String()
 	dChunkId, _ := c.Arg(1).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
-	reqId := c.Arg(2).String()
-	dataChunks, _ := c.Arg(3).Int()
-	parityChunks, _ := c.Arg(4).Int()
 
 	// Start counting time.
 	if err := collector.Collect(collector.LogStart, "get", reqId, chunkId, time.Now().UnixNano()); err != nil {
 		p.log.Warn("Fail to record start of request: %v", err)
 	}
-
-	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, dataChunks, parityChunks)
 
 	// key is "key"+"chunkId"
 	//meta, ok := p.metaStore.Get(key, int(dChunkId))
@@ -190,6 +186,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	lambdaDest := meta.Placement[dChunkId]
+	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
+	instance := p.group.Instance(lambdaDest)
 
 	// Send request to lambda channel
 	p.log.Debug("Requesting to get %s: %d", chunkKey, lambdaDest)
@@ -203,15 +201,14 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		EnableCollector: true,
 	}
 	counter.Requests[dChunkId] = req
+
 	// Unlikely, just to be safe
-	if counter.IsFulfilled(counter.Returned()) {
-		returned := counter.AddReturned(int(dChunkId))
+	if counter.IsFulfilled() || instance.IsReclaimed() {
+		status := counter.AddReturned(int(dChunkId))
 		req.Abandon()
-		if counter.IsAllReturned(returned) {
-			global.ReqCoordinator.Clear(reqId, counter)
-		}
+		counter.ReleaseIfAllReturned(status)
 	} else {
-		p.group.Instance(lambdaDest).C() <- req
+		instance.C() <- req
 	}
 }
 
@@ -266,23 +263,6 @@ func (p *Proxy) CollectData() {
 		p.log.Info("Data collected.")
 	}
 }
-
-//func (p *Proxy) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
-//	numBaks := BackupsPerInstance
-//	numTotal := numBaks * 2
-//	distance := g.Len() / (numTotal + 1) // main + double backup candidates
-//	if distance == 0 {
-//		// In case 2 * total >= g.Len()
-//		distance = 1
-//		numBaks = util.Ifelse(numBaks >= g.Len(), g.Len()-1, numBaks).(int) // Use all
-//		numTotal = util.Ifelse(numTotal >= g.Len(), g.Len()-1, numTotal).(int)
-//	}
-//	candidates := make([]*lambdastore.Instance, numTotal)
-//	for j := 0; j < numTotal; j++ {
-//		candidates[j] = g.Instance((i + j*distance + rand.Int()%distance + 1) % g.Len()) // Random to avoid the same backup set.
-//	}
-//	return numBaks, candidates
-//}
 
 func (p *Proxy) dropEvicted(meta *Meta) {
 	reqId := uuid.New().String()

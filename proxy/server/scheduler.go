@@ -7,8 +7,8 @@ import (
 
 	"github.com/cornelk/hashmap"
 	"github.com/mason-leap-lab/infinicache/common/util"
-
 	"github.com/mason-leap-lab/infinicache/migrator"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
@@ -35,13 +35,13 @@ func NewScheduler(numCluster int, numDeployment int) *Scheduler {
 		actives: hashmap.New(uintptr(numCluster)),
 	}
 	for i := 0; i < numDeployment; i++ {
-		s.pool <- lambdastore.NewDeployment(LambdaPrefix, uint64(i), false)
+		s.pool <- lambdastore.NewDeployment(config.LambdaPrefix, uint64(i), false)
 	}
 	return s
 }
 
 func newScheduler() *Scheduler {
-	return NewScheduler(NumLambdaClusters, LambdaMaxDeployments)
+	return NewScheduler(config.NumLambdaClusters, config.LambdaMaxDeployments)
 }
 
 func (s *Scheduler) GetForGroup(g *Group, idx int) *lambdastore.Instance {
@@ -77,7 +77,7 @@ func (s *Scheduler) ReserveForInstance(insId uint64) (types.LambdaDeployment, er
 }
 
 func (s *Scheduler) getBackupsForNode(g *Group, i int) (int, []*lambdastore.Instance) {
-	numBaks := BackupsPerInstance
+	numBaks := config.BackupsPerInstance
 	numTotal := numBaks * 2
 	distance := g.Len() / (numTotal + 1) // main + double backup candidates
 	if distance == 0 {

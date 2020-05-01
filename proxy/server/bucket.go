@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 
 	"github.com/cornelk/hashmap"
@@ -41,13 +42,15 @@ func newBucket(id int, args ...interface{}) *bucket {
 	}
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
-	bucket.rang = NumLambdaClusters
-	bucket.group = NewGroup(NumLambdaClusters)
+
+	bucket.rang = config.NumLambdaClusters
+	bucket.group = NewGroup(config.NumLambdaClusters)
+
 
 	for i := range bucket.group.All {
 		node := scheduler.GetForGroup(bucket.group, i)
-		node.Meta.Capacity = InstanceCapacity
-		node.Meta.IncreaseSize(InstanceOverhead)
+		node.Meta.Capacity = config.InstanceCapacity
+		node.Meta.IncreaseSize(config.InstanceOverhead)
 		bucket.log.Debug("[adding lambda instance %v]", node.Name())
 
 		// Begin handle requests
@@ -74,8 +77,9 @@ func newEmptyBucket(id int) *bucket {
 	}
 	bucket.m = hashmap.HashMap{}
 	bucket.id = id
-	bucket.rang = NumLambdaClusters
-	bucket.group = NewGroup(NumLambdaClusters)
+
+	bucket.rang = config.NumLambdaClusters
+	bucket.group = NewGroup(config.NumLambdaClusters)
 
 	return bucket
 }
