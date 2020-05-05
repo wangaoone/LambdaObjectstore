@@ -85,15 +85,18 @@ func (l *Placer) GetOrInsert(key string, newMeta *Meta) (*Meta, bool) {
 		meta.placerMeta = newPlacerMeta()
 	}
 
+	id := int(l.proxy.movingWindow.activeInstances(meta.NumChunks)[chunkId].LambdaDeployment.Id())
+	l.log.Debug("instanceId is %v", id)
 	// place
-	instanceId := int(l.proxy.movingWindow.activeInstances(meta.NumChunks)[chunkId].LambdaDeployment.Id())
+	instanceId := id
+
 	meta.Placement[chunkId] = instanceId
 	l.updateInstanceSize(instanceId, meta.ChunkSize)
 
 	// get current pointer and instance ID
 	l.log.Debug("chunk id is %v, instance Id is %v", chunkId, instanceId)
 	// use last arrived chunk to touch meta
-	l.touch(meta)
+	//l.touch(meta)
 
 	//l.log.Debug("placement is %v", meta.Placement)
 	return meta, got
@@ -105,7 +108,7 @@ func (l *Placer) Get(key string, chunk int) (*Meta, bool) {
 		return nil, ok
 	}
 	// use last arrived chunk to touch meta
-	l.touch(meta)
+	//l.touch(meta)
 	return meta, ok
 }
 
