@@ -19,27 +19,43 @@ import (
 	"github.com/cornelk/hashmap"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/proxy/collector"
-
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/proxy/collector"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
 const (
-	INSTANCE_SLEEP     = 0
-	INSTANCE_AWAKE     = 1
-	INSTANCE_MAYBE     = 2
+	INSTANCE_MASK_STATUS_START      = 0x000F
+	INSTANCE_MASK_STATUS_CONNECTION = 0x00F0
+	INSTANCE_MASK_STATUS_BACKING    = 0x0F00
+	INSTANCE_MASK_STATUS_LIFECYCLE  = 0xF000
+
+	// Start status
+	INSTANCE_UNSTARTED = 0
+	INSTANCE_STARTED   = 1
+
+	// Connection status
+	INSTANCE_SLEEP = 0
+	INSTANCE_AWAKE = 1
+	INSTANCE_MAYBE = 2
+
+	// Backing status
+	INSTANCE_RECOVERING = 1
+	INSTANCE_BACKING    = 2
+
+	// Lifecycle status
 	PHASE_ACTIVE       = 0 // Instance is actively serving main repository and backup
 	PHASE_BACKING_ONLY = 1 // Instance is expiring and serving backup only, warmup should be degraded.
 	PHASE_RECLAIMED    = 2 // Instance has been reclaimed.
 	PHASE_EXPIRED      = 3 // Instance is expired, no invocation will be made, and it is safe to recycle.
-	MAX_RETRY          = 3
-	TEMP_MAP_SIZE      = 10
-	BACKING_DISABLED   = 0
-	BACKING_RESERVED   = 1
-	BACKING_ENABLED    = 2
+
+	MAX_RETRY        = 3
+	TEMP_MAP_SIZE    = 10
+	BACKING_DISABLED = 0
+	BACKING_RESERVED = 1
+	BACKING_ENABLED  = 2
 )
 
 var (
@@ -60,7 +76,7 @@ var (
 
 type InstanceRegistry interface {
 	Instance(uint64) (*Instance, bool)
-	Reroute(uint64) *Instance
+	Reroute(interface{}, int) *Instance
 }
 
 type ValidateOption struct {
@@ -71,10 +87,12 @@ type ValidateOption struct {
 type Instance struct {
 	*Deployment
 	Meta
+	BucketId int64
 
 	cn           *Connection
 	chanCmd      chan types.Command
 	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
+	started      uint32
 	awake        uint32
 	phase        uint32
 	// awakeLock     sync.Mutex
@@ -83,6 +101,7 @@ type Instance struct {
 	mu            sync.Mutex
 	closed        chan struct{}
 	coolTimer     *time.Timer
+	coolTimeout   time.Duration
 
 	// Connection management
 	sessions *hashmap.HashMap
@@ -103,7 +122,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 	dp.log = &logger.ColorLogger{
 		Prefix: fmt.Sprintf("%s ", dp.name),
 		Level:  global.Log.GetLevel(),
-		Color:  true,
+		Color:  !global.Options.NoColor,
 	}
 
 	chanValidated := make(chan struct{})
@@ -118,6 +137,7 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		chanValidated: chanValidated, // Initialize with a closed channel.
 		closed:        make(chan struct{}),
 		coolTimer:     time.NewTimer(WarmTimout),
+		coolTimeout:   WarmTimout,
 		sessions:      hashmap.New(TEMP_MAP_SIZE),
 		writtens:      hashmap.New(TEMP_MAP_SIZE),
 	}
@@ -128,10 +148,27 @@ func NewInstance(name string, id uint64, replica bool) *Instance {
 	return NewInstanceFromDeployment(NewDeployment(name, id, replica))
 }
 
+func (ins *Instance) Status() uint64 {
+	// 0x000F  started
+	// 0x00F0  connection
+	// 0x0F00  backing
+	var backing uint64
+	if ins.IsRecovering() {
+		backing += INSTANCE_RECOVERING
+	}
+	if ins.IsBacking() {
+		backing += INSTANCE_BACKING
+	}
+	// 0xF000  lifecycle
+	return uint64(atomic.LoadUint32(&ins.started)) +
+		(uint64(atomic.LoadUint32(&ins.awake)) << 4) +
+		(backing << 8) +
+		(uint64(atomic.LoadUint32(&ins.phase)) << 12)
+}
+
 func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
 	ins.candidates = candidates
 	ins.backups = make([]*Instance, 0, numBak)
-	ins.log.Debug("Assigned backups:%d, %v", numBak, candidates)
 }
 
 func (ins *Instance) C() chan types.Command {
@@ -141,7 +178,7 @@ func (ins *Instance) C() chan types.Command {
 func (ins *Instance) WarmUp() {
 	ins.validate(&ValidateOption{WarmUp: true})
 	// Force reset
-	ins.resetCoolTimer()
+	ins.flagWarmed()
 }
 
 func (ins *Instance) Validate(opts ...*ValidateOption) *Connection {
@@ -191,8 +228,13 @@ func (ins *Instance) HandleRequests() {
 		case <-ins.coolTimer.C:
 			// Double check, for it could timeout before a previous request got handled.
 			if len(ins.chanPriorCmd) == 0 || len(ins.chanCmd) == 0 {
-				// Do warm up
-				ins.WarmUp()
+				// Warmup will not work until first call.
+				if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED || ins.IsReclaimed() {
+					ins.resetCoolTimer()
+				} else {
+					// Force warm up.
+					ins.warmUp()
+				}
 			}
 		}
 	}
@@ -383,14 +425,12 @@ func (ins *Instance) Migrate() error {
 	return nil
 }
 
-// TODO: movingwindow set instance to degrade state
-
-// TODO: under degrade, lower warmup interval
-
 // TODO: if instance in reclaimed | no backing state -> no warmup perform
 
 func (ins *Instance) Degrade() {
-	atomic.CompareAndSwapUint32(&ins.phase, PHASE_ACTIVE, PHASE_BACKING_ONLY)
+	if atomic.CompareAndSwapUint32(&ins.phase, PHASE_ACTIVE, PHASE_BACKING_ONLY) {
+		ins.coolTimeout = config.InstanceDegradeWarmTimout
+	}
 }
 
 func (ins *Instance) Expire() {
@@ -588,7 +628,7 @@ func (ins *Instance) triggerLambdaLocked(opt *ValidateOption) {
 		Sid:     ins.initSession(),
 		Id:      ins.Id(),
 		Proxy:   fmt.Sprintf("%s:%d", global.ServerIp, global.BasePort+1),
-		Prefix:  global.Prefix,
+		Prefix:  global.Options.Prefix,
 		Log:     global.Log.GetLevel(),
 		Flags:   global.Flags | localFlags,
 		Backups: len(ins.candidates),
@@ -649,7 +689,7 @@ func (ins *Instance) flagValidated(conn *Connection, sid string, flags int64) *C
 	ins.mu.Lock()
 	defer ins.mu.Unlock()
 
-	ins.warmUp()
+	ins.flagWarmed()
 	if ins.cn != conn {
 		if !ins.startSession(sid) {
 			// Deny session
@@ -804,10 +844,9 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 	}
 
 	// Reset timer
-	ins.warmUp()
+	ins.flagWarmed()
 }
 
-// TODO: add instance id
 func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	// Rerouted keys will not be rerouted.
 	// During parallel recovery, the instance can be backing another instance. (Backing before recovery triggered)
@@ -824,6 +863,12 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	bakId := xxhash.Sum64([]byte(req.Key)) % uint64(len(ins.backups))
 	ins.backups[bakId].chanPriorCmd <- req // Rerouted request should not be queued again.
 	ins.log.Debug("Rerouted %s to node %d as backup %d.", req.Key, ins.backups[bakId].Id(), bakId)
+	return true
+}
+
+func (ins *Instance) rerouteRequestWithTarget(req *types.Request, target *Instance) bool {
+	target.chanPriorCmd <- req // Rerouted request should not be queued again.
+	ins.log.Debug("Rerouted %s to node %d for %s.", req.Key, target.Id(), req.Cmd)
 	return true
 }
 
@@ -852,17 +897,22 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			// And we now know it.
 			if ins.IsReclaimed() && req.InsId == ins.Id() {
 				// TODO: Handle reclaiming event
-				// Options here:
-				// 1. Recover to prevail node and reroute to the node. TODO: change CMD from GET to Recover, and add 1 arg retCMD
+				// Options here: use option 1
+				// 1. Recover to prevail node and reroute to the node.
 				// 2. Return 404 (current implementation)
-				counter, ok := global.ReqCoordinator.Load(req.Id.ReqId)
-				if ok == false {
-					ins.log.Warn("Request not found: %s", req.Id.ReqId)
-				} else {
-					chunkId, _ := strconv.Atoi(req.Id.ChunkId)
-					counter.ReleaseIfAllReturned(counter.AddReturned(chunkId))
-				}
-				req.Abandon()
+				req.Cmd = protocol.CMD_RECOVER
+				req.RetCommand = protocol.CMD_GET
+				chunkId := req.Id.Chunk()
+				target := Registry.Reroute(req.Obj, chunkId)
+				ins.rerouteRequestWithTarget(req, target)
+				// counter := global.ReqCoordinator.Load(req.Id.ReqId).(*global.RequestCounter)
+				// if counter == nil {
+				// 	ins.log.Warn("Request not found: %s", req.Id.ReqId)
+				// } else {
+				// 	chunkId, _ := strconv.Atoi(req.Id.ChunkId)
+				// 	counter.ReleaseIfAllReturned(counter.AddReturned(chunkId))
+				// }
+				// req.Abandon()
 				return nil
 			}
 			req.PrepareForGet(conn.w)
@@ -872,6 +922,8 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			if ins.IsRecovering() {
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
+		case protocol.CMD_RECOVER:
+			req.PrepareForRecover(conn.w)
 		default:
 			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
 			// Unrecoverable
@@ -911,6 +963,8 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 			if ins.IsRecovering() {
 				ins.writtens.Set(ctrl.Request.Key, &struct{}{})
 			}
+		case protocol.CMD_RECOVER:
+			ctrl.PrepareForRecover(conn.w)
 		default:
 			ins.log.Error("Unexpected control command: %s", cmd)
 			// Unrecoverable
@@ -946,7 +1000,14 @@ func (ins *Instance) isClosedLocked() bool {
 }
 
 func (ins *Instance) warmUp() {
-	if global.IsWarmupWithFixedInterval() {
+	ins.validate(&ValidateOption{WarmUp: true})
+	// Force reset
+	ins.resetCoolTimer()
+}
+
+func (ins *Instance) flagWarmed() {
+	atomic.StoreUint32(&ins.started, INSTANCE_STARTED)
+	if global.IsWarmupWithFixedInterval() || ins.IsReclaimed() {
 		return
 	}
 
@@ -960,7 +1021,7 @@ func (ins *Instance) resetCoolTimer() {
 		default:
 		}
 	}
-	ins.coolTimer.Reset(WarmTimout)
+	ins.coolTimer.Reset(ins.coolTimeout)
 }
 
 func (ins *Instance) promoteCandidate(dest int, src int) int {
@@ -976,4 +1037,22 @@ func (ins *Instance) promoteCandidate(dest int, src int) int {
 	} else {
 		return 0
 	}
+}
+
+func (ins *Instance) CollectData() {
+	if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+		return
+	}
+
+	global.DataCollected.Add(1)
+	ins.C() <- &types.Control{Cmd: "data"}
+}
+
+func (ins *Instance) FlagDataCollected(ok string) {
+	if atomic.LoadUint32(&ins.started) == INSTANCE_UNSTARTED {
+		return
+	}
+
+	ins.log.Debug("Data collected: %s", ok)
+	global.DataCollected.Done()
 }

@@ -9,6 +9,14 @@ import (
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
+)
+
+const (
+	BUCKET_EXPIRE = 0
+	BUCKET_COLD   = 1
+	BUCKET_ACTIVE = 2
 )
 
 var (
@@ -37,6 +45,9 @@ type Bucket struct {
 	// pointer on group
 	start int
 	end   int
+
+	//state
+	state int
 }
 
 func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Bucket, err error) {
@@ -44,6 +55,7 @@ func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Buck
 
 	bucket.id = id
 	bucket.log.(*logger.ColorLogger).Prefix = fmt.Sprintf("Bucket %d", id)
+	bucket.log.(*logger.ColorLogger).Color = !global.Options.NoColor
 	bucket.m = hashmap.New(1000) // estimate each bucket will hold 1000 objects
 	bucket.group = group
 
@@ -61,6 +73,7 @@ func newBucket(id int, group *Group, num int, args ...interface{}) (bucket *Buck
 
 	bucket.start = bucket.end - num
 	bucket.initInstance(bucket.start, num)
+	bucket.state = BUCKET_ACTIVE
 	return
 }
 
@@ -69,23 +82,24 @@ func (b *Bucket) initInstance(from, length int) {
 		node := scheduler.GetForGroup(b.group, i)
 		node.Meta.Capacity = config.InstanceCapacity
 		node.Meta.IncreaseSize(config.InstanceOverhead)
+		// assign bucket id to new instance
+		node.BucketId = int64(b.id)
 		b.log.Debug("[adding lambda instance %v]", node.Name())
 
 		// Begin handle requests
 		go node.HandleRequests()
 
 		// Initialize instance, Bucket is not necessary if the start time of the instance is acceptable.
-		b.ready.Add(1)
-
-		go func() {
-			node.WarmUp()
-			b.ready.Done()
-		}()
+		// b.ready.Add(1)
+		//
+		// go func() {
+		// 	node.WarmUp()
+		// 	b.ready.Done()
+		// }()
 	}
 	//b.log.Debug("start name is %v, end %v, base is %v", b.group.All[b.start].Name(), b.group.All[from+len-1].Name(), b.group.base)
 	b.instances = b.group.SubGroup(from, from+length)
 	b.log.Debug("len is %v, start is %v, end is %v", len(b.instances), b.instances[0].Name(), b.instances[len(b.instances)-1].Name())
-
 }
 
 func (b *Bucket) waitReady() {
@@ -124,4 +138,36 @@ func (b *Bucket) activeInstances(activeNum int) []*GroupInstance {
 		return b.instances
 	}
 	return b.group.All[b.end-activeNum : b.end]
+}
+
+func (b *Bucket) Len() int {
+	return len(b.instances)
+}
+
+func (b *Bucket) InstanceStats(idx int) types.InstanceStats {
+	return b.instances[idx].LambdaDeployment.(*lambdastore.Instance)
+}
+
+func (b *Bucket) AllInstancesStats() types.Iterator {
+	all := b.instances
+	return types.NewStatsIterator(all, len(all))
+}
+
+func (b *Bucket) InstanceStatsFromIterator(iter types.Iterator) (int, types.InstanceStats) {
+	i, val := iter.Value()
+
+	var ins *GroupInstance
+	switch item := val.(type) {
+	case []*GroupInstance:
+		ins = item[i]
+	case *GroupInstance:
+		ins = item
+	}
+
+	if ins == nil {
+		return i, nil
+	} else {
+		return i, ins.LambdaDeployment.(*lambdastore.Instance)
+	}
+
 }

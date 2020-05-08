@@ -1,6 +1,7 @@
 package server
 
 import (
+	"math/rand"
 	"sync"
 	"time"
 
@@ -8,10 +9,19 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/global"
 	"github.com/mason-leap-lab/infinicache/proxy/lambdastore"
+	"github.com/mason-leap-lab/infinicache/proxy/types"
+)
+
+const (
+	BucketDuration = 10 // min
+	ActiveReplica  = 2
 )
 
 var (
-	activeNumBuckets = 12
+	ActiveDuration   = 120 // min
+	ExpireDuration   = 360 //min
+	ActiveBucketsNum = ActiveDuration / BucketDuration
+	ExpireBucketsNum = ExpireDuration / BucketDuration
 	NumBackupBuckets = 3 * 6
 )
 
@@ -35,16 +45,38 @@ type MovingWindow struct {
 	mu sync.Mutex
 }
 
+func (mw *MovingWindow) Instance(id uint64) (*lambdastore.Instance, bool) {
+	got, exists := scheduler.actives.Get(id)
+	if !exists {
+		return nil, exists
+	}
+
+	ins := got.(*GroupInstance)
+	validated := ins.group.Validate(ins)
+	if validated != ins {
+		// Switch keys
+		scheduler.actives.Set(validated.Id(), validated)
+		scheduler.actives.Set(ins.Id(), ins)
+		// Recycle ins
+		scheduler.Recycle(ins.LambdaDeployment)
+	}
+	return validated.LambdaDeployment.(*lambdastore.Instance), exists
+}
+
+func (mw *MovingWindow) Reroute(obj interface{}, chunkId int) *lambdastore.Instance {
+	return mw.getActiveInstanceForChunk(obj.(*Meta), chunkId)
+}
+
 func NewMovingWindow(window int, interval int) *MovingWindow {
 	group := NewGroup(config.NumLambdaClusters)
 	return &MovingWindow{
 		log: &logger.ColorLogger{
 			Prefix: "Moving window ",
 			Level:  global.Log.GetLevel(),
-			Color:  true,
+			Color:  !global.Options.NoColor,
 		},
 		group:     group,
-		num:       activeNumBuckets,
+		num:       ActiveBucketsNum,
 		window:    window,
 		interval:  interval,
 		buckets:   make([]*Bucket, 0, 500),
@@ -71,6 +103,33 @@ func (mw *MovingWindow) assignBackup(instances []*GroupInstance) {
 		mw.log.Debug("instance is %v", node.Name())
 		node.AssignBackups(num, candidates)
 	}
+}
+
+func (mw *MovingWindow) Len() int {
+	return len(mw.buckets)
+}
+
+func (mw *MovingWindow) ClusterStats(idx int) types.ClusterStats {
+	return mw.buckets[idx]
+}
+
+func (mw *MovingWindow) AllClustersStats() types.Iterator {
+	all := mw.buckets
+	return types.NewStatsIterator(all, len(all))
+}
+
+func (mw *MovingWindow) ClusterStatsFromIterator(iter types.Iterator) (int, types.ClusterStats) {
+	i, val := iter.Value()
+
+	var b *Bucket
+	switch item := val.(type) {
+	case []*Bucket:
+		b = item[i]
+	case *Bucket:
+		b = item
+	}
+
+	return i, b
 }
 
 func (mw *MovingWindow) findBucket(expireCount int) *Bucket {
@@ -128,10 +187,9 @@ func (mw *MovingWindow) Daemon() {
 			mw.buckets = append(mw.buckets, bucket)
 			mw.assignBackup(bucket.activeInstances(config.NumLambdaClusters))
 
-			degrade := mw.getDegradingInstanceLocked()
-			if degrade != nil {
-				mw.degrade(degrade)
-			}
+			//check degrade and expire
+			mw.DegradeCheck()
+			mw.ExpireCheck()
 
 			// update cursor, point to active bucket
 			mw.cursor = bucket
@@ -155,6 +213,94 @@ func (mw *MovingWindow) getInstanceId(id int, from int) int {
 	return idx
 }
 
+func (mw *MovingWindow) activeInstances(num int) []*GroupInstance {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+
+	return mw.getCurrentBucket().activeInstances(num)
+}
+
+func (mw *MovingWindow) avgSize(bucket *Bucket) int {
+	sum := 0
+	start := bucket.start
+	end := bucket.end
+
+	for i := start; i < end; i++ {
+		sum += int(mw.group.Instance(int(i)).Meta.Size())
+	}
+
+	return sum / (end - start + 1)
+}
+
+// Bucket degrading
+func (mw *MovingWindow) getDegradingInstanceLocked() *Bucket {
+	if len(mw.buckets) <= ActiveBucketsNum {
+		return nil
+	} else {
+		return mw.buckets[len(mw.buckets)-ActiveBucketsNum-1]
+	}
+}
+
+func (mw *MovingWindow) degrade(bucket *Bucket) {
+	for _, ins := range bucket.instances {
+		ins.LambdaDeployment.(*lambdastore.Instance).Degrade()
+	}
+}
+
+func (mw *MovingWindow) DegradeCheck() {
+	degradeBucket := mw.getDegradingInstanceLocked()
+	if degradeBucket != nil {
+		mw.degrade(degradeBucket)
+		degradeBucket.state = BUCKET_COLD
+	}
+}
+
+// Bucket expiration
+func (mw *MovingWindow) getExpiringInstanceLocked() *Bucket {
+	if len(mw.buckets) <= ExpireBucketsNum {
+		return nil
+	} else {
+		return mw.buckets[len(mw.buckets)-ExpireBucketsNum-1]
+	}
+}
+
+func (mw *MovingWindow) expire(bucket *Bucket) {
+	for _, ins := range bucket.instances {
+		ins.LambdaDeployment.(*lambdastore.Instance).Expire()
+	}
+}
+
+func (mw *MovingWindow) ExpireCheck() {
+	expireBucket := mw.getExpiringInstanceLocked()
+	if expireBucket != nil {
+		mw.expire(expireBucket)
+		expireBucket.state = BUCKET_EXPIRE
+	}
+}
+
+func (mw *MovingWindow) getActiveInstanceForChunk(obj *Meta, chunkId int) *lambdastore.Instance {
+	instances := mw.activeInstances(obj.NumChunks)
+	return instances[chunkId].LambdaDeployment.(*lambdastore.Instance)
+}
+
+func (mw *MovingWindow) Refresh(obj *Meta, chunkId int) (*lambdastore.Instance, bool) {
+	oldBucketId := obj.placerMeta.bucketIdx
+	if mw.getCurrentBucket().id-oldBucketId >= ActiveBucketsNum {
+		instance := mw.getActiveInstanceForChunk(obj, chunkId)
+		return instance, true
+	} else if mw.rand() == 1 && mw.getCurrentBucket().id-oldBucketId >= (ActiveBucketsNum/ActiveReplica) {
+		instance := mw.getActiveInstanceForChunk(obj, chunkId)
+		return instance, true
+	}
+
+	return nil, false
+}
+
+func (mw *MovingWindow) rand() int {
+	rand.Seed(time.Now().UnixNano())
+	return rand.Intn(2) // [0,2) random
+}
+
 func (mw *MovingWindow) touch(meta *Meta) {
 	//mw.log.Debug("in touch %v", meta.Placement)
 	//// brand new meta(-1) or already existed
@@ -172,34 +318,4 @@ func (mw *MovingWindow) touch(meta *Meta) {
 	//}
 	//
 	//meta.placerMeta.bucketIdx = mw.cursor.id
-}
-
-func (mw *MovingWindow) activeInstances(num int) []*GroupInstance {
-	return mw.getCurrentBucket().activeInstances(num)
-}
-
-func (mw *MovingWindow) avgSize(bucket *Bucket) int {
-	sum := 0
-	start := bucket.start
-	end := bucket.end
-
-	for i := start; i < end; i++ {
-		sum += int(mw.group.Instance(int(i)).Meta.Size())
-	}
-
-	return sum / (end - start + 1)
-}
-
-func (mw *MovingWindow) getDegradingInstanceLocked() *Bucket {
-	if len(mw.buckets) <= activeNumBuckets {
-		return nil
-	} else {
-		return mw.buckets[len(mw.buckets)-activeNumBuckets-1]
-	}
-}
-
-func (mw *MovingWindow) degrade(bucket *Bucket) {
-	for _, ins := range bucket.instances {
-		ins.LambdaDeployment.(*lambdastore.Instance).Degrade()
-	}
 }
