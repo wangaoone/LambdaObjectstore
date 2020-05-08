@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	BucketDuration = 10 // min
+	BucketDuration = 1 // min
 	ActiveReplica  = 2
 )
 
 var (
-	ActiveDuration   = 120 // min
-	ExpireDuration   = 360 //min
+	ActiveDuration   = 5 // min
+	ExpireDuration   = 10 //min
 	ActiveBucketsNum = ActiveDuration / BucketDuration
 	ExpireBucketsNum = ExpireDuration / BucketDuration
 	NumBackupBuckets = 3 * 6
@@ -159,8 +159,7 @@ func (mw *MovingWindow) start() {
 func (mw *MovingWindow) Daemon() {
 	idx := 1
 	for {
-		//ticker := time.NewTicker(time.Duration(mw.interval) * time.Minute)
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(time.Duration(BucketDuration) * time.Minute)
 		select {
 		// scaling out in bucket
 		case <-mw.scaler:
