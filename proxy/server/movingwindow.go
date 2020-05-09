@@ -18,8 +18,8 @@ const (
 )
 
 var (
-	ActiveDuration     = 3 // min
-	ExpireDuration     = 6 //min
+	ActiveDuration     = 2 // min
+	ExpireDuration     = 4 //min
 	ActiveBucketsNum   = ActiveDuration / BucketDuration
 	ExpireBucketsNum   = ExpireDuration / BucketDuration
 	NumBackupInstances = config.BackupsPerInstance * config.NumLambdaClusters
