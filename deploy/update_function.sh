@@ -6,7 +6,7 @@ KEY="lambda"
 cluster=400
 mem=1536
 
-S3="mason-leap-lab.infinicache"
+S3="ao.lambda.code"
 
 cd $BASE/../lambda
 echo "Compiling lambda code..."
