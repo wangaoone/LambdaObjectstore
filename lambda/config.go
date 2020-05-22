@@ -10,8 +10,8 @@ const (
 )
 
 var (
-	S3_COLLECTOR_BUCKET string      = "tianium.default"
-	S3_BACKUP_BUCKET string         = "tianium.infinicache%s"
+	S3_COLLECTOR_BUCKET string      = "infinistore-xiaolong"
+	S3_BACKUP_BUCKET string         = "infinistorebackup-xiaolong%s"
 
 	DRY_RUN            = false
 )
