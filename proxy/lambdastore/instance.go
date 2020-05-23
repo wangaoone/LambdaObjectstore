@@ -91,6 +91,7 @@ type Instance struct {
 	Meta
 	BucketId     int64
 	ChunkCounter int
+	KeyMap       []string
 
 	cn            *Connection
 	chanCmd       chan types.Command
@@ -142,6 +143,8 @@ func NewInstanceFromDeployment(dp *Deployment) *Instance {
 		coolTimeout:   WarmTimout,
 		sessions:      hashmap.New(TEMP_MAP_SIZE),
 		writtens:      hashmap.New(TEMP_MAP_SIZE),
+
+		KeyMap: make([]string, 0, 3000),
 	}
 }
 
@@ -295,6 +298,10 @@ func (ins *Instance) startRecoveryLocked() int {
 				tested[offset] = true
 			}
 		}
+		// run out of the candidates instances
+		if offset == len(tested) {
+			break
+		}
 	}
 	if len(ins.backups) != lastnum {
 		// The difference of total changes everything.
@@ -326,6 +333,9 @@ func (ins *Instance) ResumeServing() {
 	for _, backup := range ins.backups {
 		backup.StopBacking(ins)
 	}
+	// detect multiple recovered cmd
+	// shrink backups
+	ins.backups = ins.backups[:0]
 	// Clear whitelist during fast recovery.
 	if ins.writtens.Len() > 0 {
 		ins.writtens = hashmap.New(TEMP_MAP_SIZE)
