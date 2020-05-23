@@ -247,6 +247,10 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 }
 
 func (s *Storage) SetRecovery(key string, chunkId string) *types.OpRet {
+	_, _, err := s.Get(key)
+	if err.Error() == nil {
+		return err
+	}
 	bucket := s.getBucket(key)
 	object := &s3.GetObjectInput{
 		Bucket: s.bucket(&bucket),

@@ -139,14 +139,21 @@ func (conn *Connection) ServeLambda() {
 			if err != nil && err == io.EOF {
 				conn.log.Warn("Lambda store disconnected.")
 				conn.close()
+				break
 			} else if err != nil {
 				conn.log.Warn("Error on read response type: %v", err)
 				break
 			}
 
-			switch cmd {
-			case protocol.CMD_POND:
+			if cmd == protocol.CMD_POND {
 				conn.pongHandler()
+				break
+			} else if conn.instance == nil {
+				// all other commands require instance association, or could be a rougue request.
+				break
+			}
+
+			switch cmd {
 			case protocol.CMD_RECOVERED:
 				conn.recoveredHandler()
 			case protocol.CMD_GET:
@@ -237,13 +244,32 @@ func (conn *Connection) peekResponse() {
 	}
 }
 
+func (conn *Connection) closeIfError(prompt string, err error) bool {
+	if err != nil {
+		conn.log.Warn(prompt, err)
+		conn.close()
+		return true
+	}
+
+	return false
+}
+
 func (conn *Connection) pongHandler() {
 	conn.log.Debug("PONG from lambda.")
 
 	// Read lambdaId, if it is negatvie, we need a parallel recovery.
-	id, _ := conn.r.ReadInt()
-	sid, _ := conn.r.ReadBulkString()
-	flags, _ := conn.r.ReadInt()
+	id, err := conn.r.ReadInt()
+	if conn.closeIfError("Discard rouge POND for missing store id: %v.", err) {
+		return
+	}
+	sid, err := conn.r.ReadBulkString()
+	if conn.closeIfError("Discard rouge POND for missing session id: %v.", err) {
+		return
+	}
+	flags, err := conn.r.ReadInt()
+	if conn.closeIfError("Discard rouge POND for missing flags: %v.", err) {
+		return
+	}
 
 	if conn.instance != nil {
 		conn.instance.flagValidated(conn, sid, flags)
@@ -413,12 +439,12 @@ func (conn *Connection) recoverHandler() {
 	reqId, _ := conn.r.ReadBulkString()
 	_, _ = conn.r.ReadBulkString() // chunkId
 
-	ctrl := global.ReqCoordinator.Load(reqId).(*types.Control)
+	ctrl := global.ReqCoordinator.Load(reqId)
 	if ctrl == nil {
 		conn.log.Warn("No control found for %s", reqId)
-	} else if ctrl.Callback == nil {
+	} else if ctrl.(*types.Control).Callback == nil {
 		conn.log.Warn("Control callback not defined for recover request %s", reqId)
 	} else {
-		ctrl.Callback(ctrl, conn.instance)
+		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
 }

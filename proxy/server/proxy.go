@@ -149,7 +149,7 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		BodyStream:      bodyStream,
 		Client:          client,
 		EnableCollector: true,
-		Obj:             meta,
+		Info:            meta,
 	}
 	// p.log.Debug("KEY is", key.String(), "IN SET UPDATE, reqId is", reqId, "connId is", connId, "chunkId is", chunkId, "lambdaStore Id is", lambdaId)
 	temp, _ := p.placer.Get(key, int(dChunkId))
@@ -170,28 +170,16 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 
 	// key is "key"+"chunkId"
-	//meta, ok := p.metaStore.Get(key, int(dChunkId))
-	//if !ok || meta.Deleted {
-	//	// Object may be deleted.
-	//	p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
-	//	w.AppendErrorf("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
-	//	w.Flush()
-	//	return
-	//}
-
 	meta, ok := p.placer.Get(key, int(dChunkId))
-	p.log.Debug("ok ? %v", ok)
 	if !ok {
-		p.log.Warn("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
-		w.AppendErrorf("KEY %s@%s not found in lambda store, please set first.", chunkId, key)
+		p.log.Warn("KEY %s@%s not found", chunkId, key)
+		w.AppendNil()
 		w.Flush()
 		return
 	}
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	instance := p.movingWindow.group.Instance(lambdaDest)
-
-	p.log.Debug("chunkId is %v, lambdaDest is %v, instance id is %v", dChunkId, lambdaDest, instance.Name())
 
 	chunkKey := meta.ChunkKey(int(dChunkId))
 	// Send request to lambda channel
@@ -204,7 +192,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		Key:             chunkKey,
 		Client:          client,
 		EnableCollector: true,
-		Obj:             meta,
+		Info:            meta,
 	}
 	counter.Requests[dChunkId] = req
 
@@ -224,7 +212,20 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	switch rsp := wrapper.Response.(type) {
 	case *types.Response:
 		t := time.Now()
-		rsp.PrepareFor(w)
+		switch wrapper.Request.Cmd {
+		case protocol.CMD_RECOVER:
+			// on GET request from reclaimed instances, it will get recovered from new instances,
+			// the response of this cmd_recover's behavior is the same as cmd_get
+			fallthrough
+		case protocol.CMD_GET:
+			rsp.Size = wrapper.Request.Info.(*Meta).Size
+			rsp.PrepareForGet(w)
+		case protocol.CMD_SET:
+			rsp.PrepareForSet(w)
+		default:
+			p.log.Error("Unsupport request on proxy reponse: %s", wrapper.Request.Cmd)
+			return
+		}
 		d1 := time.Since(t)
 		t2 := time.Now()
 		// flush buffer, return on errors
@@ -245,33 +246,47 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 				p.log.Warn("LogServer2Client err %v", err)
 			}
 		}
-	// Use more general way to deal error
+
+		// update placement at reroute
+		if wrapper.Request.Cmd == protocol.CMD_RECOVER {
+			if wrapper.Request.Changes&types.CHANGE_PLACEMENT > 0 {
+				meta := wrapper.Request.Info.(*Meta)
+				meta.Placement[rsp.Id.Chunk()] = int(wrapper.Request.InsId)
+			}
+		}
+
+		// Async logic
+		if wrapper.Request.Cmd == protocol.CMD_GET {
+			// random select whether current chunk need to be refresh, if > hard limit, do refresh.
+			instance, ok := p.movingWindow.Refresh(wrapper.Request.Info.(*Meta), wrapper.Request.Id.Chunk())
+			if !ok {
+				return
+			}
+			recoverReqId := uuid.New().String()
+			p.log.Debug("selected instance id is %v", instance.Id())
+			//p.movingWindow.group.Instance(int(instanceId)).C() <- &types.Control{
+
+			control := &types.Control{
+				Cmd: protocol.CMD_RECOVER,
+				Request: &types.Request{
+					Id:         types.Id{ConnId: wrapper.Request.Id.ConnId, ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId,},
+					InsId:      instance.Id(),
+					Cmd:        protocol.CMD_RECOVER,
+					RetCommand: protocol.CMD_RECOVER,
+					Key:        wrapper.Request.Key,
+					Info:       wrapper.Request.Info,
+				},
+				Callback: p.handleRecoverCallback,
+			}
+			instance.C() <- control
+			global.ReqCoordinator.RegisterControl(recoverReqId, control)
+		}
+		// Use more general way to deal error
 	default:
 		w.AppendErrorf("%v", rsp)
 		w.Flush()
 	}
 
-	// Async logic
-	if wrapper.Request.Cmd == protocol.CMD_GET {
-		// random select whether current chunk need to be refresh, if > hard limit, do refresh.
-		instance, ok := p.movingWindow.Refresh(wrapper.Request.Obj.(*Meta), wrapper.Request.Id.Chunk())
-		if !ok {
-			return
-		}
-		recoverReqId := uuid.New().String()
-
-		//p.movingWindow.group.Instance(int(instanceId)).C() <- &types.Control{
-		instance.C() <- &types.Control{
-			Cmd: protocol.CMD_RECOVER,
-			Request: &types.Request{
-				Id:    types.Id{ConnId: wrapper.Request.Id.ConnId, ReqId: recoverReqId, ChunkId: wrapper.Request.Id.ChunkId,},
-				InsId: instance.Id(),
-				Cmd:   protocol.CMD_RECOVER,
-				Key:   wrapper.Request.Key,
-			},
-			Callback: p.handleRecoverCallback,
-		}
-	}
 }
 
 func (p *Proxy) CollectData() {
@@ -294,7 +309,8 @@ func (p *Proxy) CollectData() {
 
 func (p *Proxy) handleRecoverCallback(ctrl *types.Control, arg interface{}) {
 	instance := arg.(*lambdastore.Instance)
-	ctrl.Obj.(*Meta).Placement[ctrl.Request.Id.Chunk()] = int(instance.Id())
+	ctrl.Info.(*Meta).Placement[ctrl.Request.Id.Chunk()] = int(instance.Id())
+	p.log.Debug("async updated instance %v", int(instance.Id()))
 }
 
 func (p *Proxy) dropEvicted(meta *Meta) {
