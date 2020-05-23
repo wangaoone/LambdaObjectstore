@@ -3,7 +3,7 @@
 BASE=`pwd`/`dirname $0`
 PREFIX="Proxy2Node"
 KEY="lambda"
-cluster=400
+cluster=50
 mem=1536
 
 S3="ao.lambda.code"

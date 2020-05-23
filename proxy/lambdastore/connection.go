@@ -445,6 +445,7 @@ func (conn *Connection) recoverHandler() {
 	} else if ctrl.(*types.Control).Callback == nil {
 		conn.log.Warn("Control callback not defined for recover request %s", reqId)
 	} else {
+		conn.log.Debug("before call back , key is %v, obj is %v", ctrl.(*types.Control).Key, ctrl.(*types.Control).Info)
 		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
 }

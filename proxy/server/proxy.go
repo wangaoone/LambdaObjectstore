@@ -281,7 +281,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 			instance.C() <- control
 			global.ReqCoordinator.RegisterControl(recoverReqId, control)
 		}
-		// Use more general way to deal error
+	// Use more general way to deal error
 	default:
 		w.AppendErrorf("%v", rsp)
 		w.Flush()

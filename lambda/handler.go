@@ -5,13 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-lambda-go/lambdacontext"
-	"github.com/kelindar/binary"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/infinicache/common/util"
-	"github.com/mason-leap-lab/redeo"
-	"github.com/mason-leap-lab/redeo/resp"
 	//	"github.com/wangaoone/s3gof3r"
 	"io"
 	"math"
@@ -26,14 +19,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-lambda-go/lambdacontext"
+	"github.com/kelindar/binary"
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/infinicache/common/util"
+	"github.com/mason-leap-lab/redeo"
+	"github.com/mason-leap-lab/redeo/resp"
+
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 	"github.com/mason-leap-lab/infinicache/lambda/collector"
+	"github.com/mason-leap-lab/infinicache/lambda/handlers"
 	lambdaLife "github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/infinicache/lambda/migrator"
-	"github.com/mason-leap-lab/infinicache/lambda/handlers"
 	"github.com/mason-leap-lab/infinicache/lambda/storage"
-	"github.com/mason-leap-lab/infinicache/lambda/types"
 	. "github.com/mason-leap-lab/infinicache/lambda/store"
+	"github.com/mason-leap-lab/infinicache/lambda/types"
 )
 
 const (
@@ -41,7 +42,7 @@ const (
 )
 
 var (
-	DefaultStatus   = protocol.Status{}
+	DefaultStatus = protocol.Status{}
 
 	// Track how long the store has lived, migration is required before timing up.
 	lifetime = lambdaLife.New(LIFESPAN)
@@ -51,9 +52,9 @@ var (
 	proxyConn net.Conn
 	srv       = redeo.NewServer(nil) // Serve requests from proxy
 
-	log       = Log
-	mu        sync.RWMutex
-	pong      = handlers.NewPongHandler()
+	log  = Log
+	mu   sync.RWMutex
+	pong = handlers.NewPongHandler()
 )
 
 func init() {
@@ -221,7 +222,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 		waitForRecovery(recoverErrs...)
 		// Signal proxy the recover procedure is done.
 		// Normally the recovery of main repository is longer than backup, so we just wait all is done.
-		if flags & protocol.PONG_RECOVERY > 0 {
+		if flags&protocol.PONG_RECOVERY > 0 {
 			recoveredHandler(ctx, session.Connection)
 		}
 		session.Timeout.DoneBusy()
@@ -662,7 +663,7 @@ func main() {
 		chunkId := c.Arg(2).String()
 		key := c.Arg(3).String()
 		retCmd := c.Arg(4).String()
-
+		Log.Debug("key is %v, retCmd is %v", key, retCmd)
 		if Persist == nil {
 			w.AppendErrorf("Recover is not supported")
 			if err := w.Flush(); err != nil {
@@ -712,7 +713,7 @@ func main() {
 		d2 := time.Since(t2)
 
 		dt := time.Since(t)
-		log.Debug("Recover complete, Key:%s, ChunkID: %s", key, chunkId)
+		log.Debug("Recover complete, Key:%s, ChunkID: %s, retCMD is %v", key, chunkId, retCmd)
 		if retCmd == protocol.CMD_GET {
 			collector.AddRequest(types.OP_RECOVER, "200", reqId, chunkId, d1, d2, dt, 0, session.Id)
 		}

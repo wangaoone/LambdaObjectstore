@@ -953,6 +953,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
+			ins.log.Debug("cmd recover %v", req.RetCommand)
 			req.PrepareForRecover(conn.w)
 		default:
 			req.SetResponse(errors.New(fmt.Sprintf("Unexpected request command: %s", cmd)))
@@ -994,6 +995,7 @@ func (ins *Instance) request(conn *Connection, cmd types.Command, validateDurati
 				ins.writtens.Set(ctrl.Request.Key, &struct{}{})
 			}
 		case protocol.CMD_RECOVER:
+			ins.log.Debug("in cmd_recover")
 			ctrl.PrepareForRecover(conn.w)
 		default:
 			ins.log.Error("Unexpected control command: %s", cmd)

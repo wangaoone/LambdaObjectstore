@@ -281,16 +281,16 @@ func (mw *MovingWindow) getActiveInstanceForChunk(obj *Meta, chunkId int) *lambd
 }
 
 func (mw *MovingWindow) Refresh(obj *Meta, chunkId int) (*lambdastore.Instance, bool) {
-	oldBucketId := obj.placerMeta.bucketIdx
-	if mw.getCurrentBucket().id-oldBucketId >= ActiveBucketsNum {
-		instance := mw.getActiveInstanceForChunk(obj, chunkId)
-		return instance, true
-	} else if mw.rand() == 1 && mw.getCurrentBucket().id-oldBucketId >= (ActiveBucketsNum/config.ActiveReplica) {
-		instance := mw.getActiveInstanceForChunk(obj, chunkId)
-		return instance, true
-	}
-
-	return nil, false
+	//oldBucketId := obj.placerMeta.bucketIdx
+	//if mw.getCurrentBucket().id-oldBucketId >= ActiveBucketsNum {
+	instance := mw.getActiveInstanceForChunk(obj, chunkId)
+	return instance, true
+	//} else if mw.rand() == 1 && mw.getCurrentBucket().id-oldBucketId >= (ActiveBucketsNum/config.ActiveReplica) {
+	//	instance := mw.getActiveInstanceForChunk(obj, chunkId)
+	//	return instance, true
+	//}
+	//
+	//return nil, false
 }
 
 func (mw *MovingWindow) rand() int {
