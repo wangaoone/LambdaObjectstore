@@ -3,10 +3,10 @@
 BASE=`pwd`/`dirname $0`
 PREFIX="CacheNode"
 KEY="lambda"
-cluster=400
-mem=1536
+cluster=100
+mem=2048
 
-S3="mason-leap-lab.infinicache"
+S3="infinistore-storage-ben"
 
 cd $BASE/../lambda
 echo "Compiling lambda code..."
