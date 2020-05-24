@@ -14,7 +14,7 @@ import (
 
 const (
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
-	ROLE = "arn:aws:iam::468610951108:user/Administrator"
+	ROLE = "arn:aws:iam::468610951108:role/lambda"
 	// AWS region, change it if necessary.
 	REGION = "us-east-1"
 )
