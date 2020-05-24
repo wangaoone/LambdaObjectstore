@@ -11,7 +11,7 @@ const AWSRegion = "us-east-1"
 const LambdaMaxDeployments = 500
 
 // NumLambdaClusters Number of Lambda function deployments initiated on launching.
-const NumLambdaClusters = 12
+const NumLambdaClusters = 100
 
 // LambdaStoreName Obsoleted. Name of Lambda function for replica version.
 const LambdaStoreName = "LambdaStore"
@@ -24,10 +24,10 @@ const InstanceWarmTimout = 1 * time.Minute
 
 // InstanceCapacity Capacity of deployed Lambda functions.
 // TODO: Detectable on invocation. Can be specified by option -funcap for now.
-const InstanceCapacity = 3008 * 1000000    // MB
+const InstanceCapacity = 2048 * 1000000    // MB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
-const InstanceOverhead = 600 * 1000000     // MB
+const InstanceOverhead = 400 * 1000000     // MB
 
 // ServerPublicIp Public IP of proxy, leave empty if running Lambda functions in VPC.
 const ServerPublicIp = ""                  // Leave it empty if using VPC.
@@ -37,7 +37,7 @@ const ServerPublicIp = ""                  // Leave it empty if using VPC.
 const RecoverRate = 100 * 1000000           // Not actually used.
 
 // BackupsPerInstance  Number of backup instances used for parallel recovery.
-const BackupsPerInstance = 24              // (InstanceCapacity - InstanceOverhead) / RecoverRate
+const BackupsPerInstance = 16              // (InstanceCapacity - InstanceOverhead) / RecoverRate
 
 // ProxyList Ip addresses of proxies.
 var ProxyList []string

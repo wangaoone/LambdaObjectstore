@@ -3,8 +3,8 @@
 BASE=`pwd`/`dirname $0`
 PREFIX="CacheNode"
 KEY="lambda"
-cluster=500
-mem=3008
+cluster=100
+mem=2048
 
 S3="infinistore-xiaolong"
 
