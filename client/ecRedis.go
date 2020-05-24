@@ -124,7 +124,7 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 
 	if placements != nil {
 		for i, ret := range ret.Rets {
-			placements[i], _ = strconv.Atoi(string(ret.([]byte)))
+			placements[i], _ = strconv.Atoi(ret.(string))
 		}
 	}
 	fmt.Println("placements is", index)
@@ -363,7 +363,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	}
 
 	cn := c.Conns[addr][i]
-	cn.conn.SetReadDeadline(time.Now().Add(Timeout))  // Set deadline for response
+	cn.conn.SetReadDeadline(time.Now().Add(Timeout)) // Set deadline for response
 	defer cn.conn.SetReadDeadline(time.Time{})
 
 	// peeking response type and receive
@@ -430,7 +430,7 @@ func (c *Client) recvGet(prompt string, addr string, reqId string, i int, ret *e
 	}
 
 	if ret.Size == 0 {
-		ret.Size, _ = strconv.Atoi(strSize)   // If err, we can try in another chunk
+		ret.Size, _ = strconv.Atoi(strSize) // If err, we can try in another chunk
 	}
 
 	log.Debug("%s chunk %d", prompt, i)
@@ -509,10 +509,10 @@ type Joiner func(io.Writer, [][]byte, int) error
 type JoinReader struct {
 	io.ReadCloser
 	writer io.Writer
-	data [][]byte
-	read int
-	size int
-	once sync.Once
+	data   [][]byte
+	read   int
+	size   int
+	once   sync.Once
 	joiner Joiner
 }
 
@@ -520,10 +520,10 @@ func NewJoinReader(data [][]byte, size int, joiner Joiner) *JoinReader {
 	reader, writer := io.Pipe()
 	return &JoinReader{
 		ReadCloser: reader,
-		writer: writer,
-		data: data,
-		size: size,
-		joiner: joiner,
+		writer:     writer,
+		data:       data,
+		size:       size,
+		joiner:     joiner,
 	}
 }
 
