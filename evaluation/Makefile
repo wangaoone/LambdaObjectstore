@@ -41,3 +41,11 @@ benchmark:
 
 benchmark-recovery: build build-bench
 	benchmark-recovery/benchmark.sh 1>./log 2>&1 &
+
+test:
+	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
+	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
+
+test-redis:
+	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
+	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1

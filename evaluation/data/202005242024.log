@@ -1,0 +1,4 @@
+.
+running proxy server
+2020/05/24 20:24:29 [31mFailed to listen lambdas: listen tcp :6379: bind: address already in use[0m
+exit status 1
