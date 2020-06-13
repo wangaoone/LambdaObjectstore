@@ -3,7 +3,7 @@
 BASE=`pwd`/`dirname $0`
 PREFIX="CacheNode"
 KEY="lambda"
-cluster=100
+cluster=512
 mem=2048
 
 S3="infinistore-storage-ben"

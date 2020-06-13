@@ -34,11 +34,11 @@ var (
 	bucket  = flag.String("S3", "mason-leap-lab.infinicache", "S3 bucket for lambda code")
 
 	subnet = []*string{
-		aws.String("subnet-0d169f20d4fdf90a7"),
-		aws.String("subnet-0df77d3c433e46fd0"),
+		aws.String("subnet-0ef913f3e513f42e6"),
+		aws.String("subnet-044d013ca5ba155ce"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-0f4ea153447b2c910"),
+		aws.String("sg-0316757e47d10fce8"),
 	}
 )
 
