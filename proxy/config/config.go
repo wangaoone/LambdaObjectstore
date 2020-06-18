@@ -27,7 +27,7 @@ const InstanceWarmTimout = 1 * time.Minute
 const InstanceCapacity = 2048 * 1000000    // MB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
-const InstanceOverhead = 200 * 1000000     // MB
+const InstanceOverhead = 400 * 1000000     // MB
 
 // ServerPublicIp Public IP of proxy, leave empty if running Lambda functions in VPC.
 const ServerPublicIp = ""                  // Leave it empty if using VPC.
@@ -43,4 +43,4 @@ const BackupsPerInstance = 20              // (InstanceCapacity - InstanceOverhe
 // private ip addr and ports for all proxies if multiple proxies are needed
 // If running on one proxy, then can be left empty. But for multiple, build static proxy list here
 // of private ip addr. and port.
-var ProxyList []string
+var ProxyList [2]string = [2]string{"10.0.119.246:6378", "10.0.101.76:6378"}

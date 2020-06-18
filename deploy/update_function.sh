@@ -3,7 +3,7 @@
 BASE=`pwd`/`dirname $0`
 PREFIX="CacheNode"
 KEY="lambda"
-cluster=512
+cluster=100
 mem=2048
 
 S3="infinistore-storage-ben"
@@ -17,5 +17,5 @@ echo "Putting code zip to s3"
 aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 
 echo "Updating lambda functions.."
-go run $BASE/deploy_function.go -S3 ${S3} -code -config -prefix=$PREFIX -vpc -key=$KEY -to=$cluster -mem=$mem -timeout=$1
+go run $BASE/deploy_function.go -S3 ${S3} -config -prefix=$PREFIX -vpc -key=$KEY -to=$cluster -mem=$mem -timeout=$1
 rm $KEY*
