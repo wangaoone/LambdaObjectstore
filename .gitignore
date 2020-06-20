@@ -10,3 +10,4 @@ lambda.zip
 evaluation/cloudwatch/data
 evaluation/downloaded
 evaluation/data
+evaluation/log_worker_vm
