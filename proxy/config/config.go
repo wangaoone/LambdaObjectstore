@@ -44,4 +44,4 @@ const BackupsPerInstance = 20              // (InstanceCapacity - InstanceOverhe
 // If running on one proxy, then can be left empty. But for multiple, build static proxy list here
 // of private ip addr. and port.
 //var ProxyList []string
-var ProxyList [2]string = [2]string{"10.0.119.246:6378", "10.0.101.76:6378"}
+var ProxyList []string = []string{"10.0.119.246:6378", "10.0.101.76:6378"}
