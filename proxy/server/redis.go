@@ -130,6 +130,7 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 
 		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
 		client.Dial(addresses)
+		a.log.Info("Dialing address: %v", addresses)
 		shortcut.Client = client
 		for _, conn := range shortcut.Conns {
 			go a.server.ServeForeignClient(conn.Server, false)
