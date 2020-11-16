@@ -164,7 +164,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	var printInfo bool
 	flag.BoolVar(&printInfo, "h", false, "help info?")
 
-	flag.BoolVar(&options.Debug, "debug", false, "Enable debug and print debug logs.")
+	flag.BoolVar(&options.Debug, "debug", true, "Enable debug and print debug logs.")
 	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")

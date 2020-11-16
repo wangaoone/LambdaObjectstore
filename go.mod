@@ -28,6 +28,7 @@ require (
 	github.com/prometheus/common v0.13.0
 	github.com/seiflotfy/cuckoofilter v0.0.0-20200106165036-28deee3eabd7
 	github.com/stretchr/objx v0.2.0 // indirect
+	github.com/tidwall/redbench v0.0.0-20181110173744-17c5b5b864a4 // indirect
 	github.com/urfave/cli v1.22.1 // indirect
 	github.com/zhangjyr/hashmap v1.0.2
 )
