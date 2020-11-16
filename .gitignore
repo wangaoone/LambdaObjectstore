@@ -11,3 +11,6 @@ evaluation/cloudwatch/data
 evaluation/downloaded
 evaluation/data
 evaluation/log_worker_vm
+log
+*.clog
+evaluation/bin

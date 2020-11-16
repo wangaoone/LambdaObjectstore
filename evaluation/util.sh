@@ -1,9 +1,10 @@
 #!/bin/bash
 
 PWD=`dirname $0`
-REDBENCH=$GOPATH/src/github.com/wangaoone/redbench
-
-echo $PWD
+BASE=`pwd`/`dirname $0`
+EVALBASE=$BASE
+PROJECTBASE=$BASE/..
+BINDIR=$EVALBASE/bin
 
 function update_lambda_timeout() {
     NAME=$1
@@ -39,7 +40,13 @@ function update_lambda_mem() {
 function start_proxy() {
     echo "running proxy server"
     PREFIX=$1
-    GOMAXPROCS=36 go run $PWD/../proxy/proxy.go -debug=true -prefix=$PREFIX -disable-color
+    DASHBOARD=$2
+    DEBUG=
+    if [ "$DASHBOARD" != "" ] ; then
+        echo "Run: GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX -log=proxy.log $DASHBOARD"
+    else
+        GOMAXPROCS=36 $BINDIR/proxy $DEBUG -prefix=$PREFIX $DASHBOARD &
+    fi
 }
 
 function bench() {
@@ -52,7 +59,7 @@ function bench() {
     P=$7
     OP=$8
     FILE=$9
-    go run $REDBENCH/bench.go -addrlist localhost:6378 -n $N -c $C -keymin $KEYMIN -keymax $KEYMAX \
+    $BINDIR/redbench -addrlist localhost:6378 -n $N -c $C -keymin $KEYMIN -keymax $KEYMAX \
     -sz $SZ -d $D -p $P -op $OP -file $FILE -dec -i 1000
 }
 
@@ -63,7 +70,12 @@ function playback() {
     CLUSTER=$4
     FILE=$5
     COMPACT=$6
-    $REDBENCH/simulator/playback/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+    OUTPUT=$7
+    if [ "$OUTPUT" != "" ] ; then
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE 1>$OUTPUT 2>&1
+    else
+        $BINDIR/playback -addrlist localhost:6378 -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+    fi
 }
 
 function dryrun() {
@@ -73,5 +85,5 @@ function dryrun() {
     CLUSTER=$4
     FILE=$5
     COMPACT=$6
-    $REDBENCH/simulator/playback/playback -dryrun -lean -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
+    $BINDIR/playback -dryrun -lean -d $D -p $P -scalesz $SCALE -cluster $CLUSTER $COMPACT $FILE
 }

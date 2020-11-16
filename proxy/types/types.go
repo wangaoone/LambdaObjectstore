@@ -2,17 +2,28 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo/resp"
 	"net"
+	"strconv"
 	"time"
+
+	"github.com/mason-leap-lab/redeo/resp"
 )
 
-var ErrNoSpareDeployment = errors.New("No spare deployment")
+var ErrNoSpareDeployment = errors.New("no spare deployment")
 
 type Id struct {
-	ConnId  int
-	ReqId   string
-	ChunkId string
+	ReqId    string
+	ChunkId  string
+	oldChunk *string
+	chunk    int
+}
+
+func (id *Id) Chunk() int {
+	if id.oldChunk != &id.ChunkId {
+		id.chunk, _ = strconv.Atoi(id.ChunkId)
+		id.oldChunk = &id.ChunkId
+	}
+	return id.chunk
 }
 
 type Conn interface {
@@ -30,7 +41,6 @@ type Command interface {
 type LambdaDeployment interface {
 	Name() string
 	Id() uint64
-	Reset(new LambdaDeployment, old LambdaDeployment)
 }
 
 type MigrationScheduler interface {
@@ -38,11 +48,21 @@ type MigrationScheduler interface {
 	GetDestination(uint64) (LambdaDeployment, error)
 }
 
-type ClusterStatus interface {
+type ClusterStats interface {
 	Len() int
-	InstanceStatus(int) InstanceStatus
+	InstanceStats(int) InstanceStats
+	AllInstancesStats() Iterator
+	InstanceStatsFromIterator(Iterator) (int, InstanceStats)
 }
 
-type InstanceStatus interface {
+type GroupedClusterStats interface {
+	Len() int
+	ClusterStats(int) ClusterStats
+	AllClustersStats() Iterator
+	ClusterStatsFromIterator(Iterator) (int, ClusterStats)
+	InstanceSum(int) int
+}
+
+type InstanceStats interface {
 	Status() uint64
 }

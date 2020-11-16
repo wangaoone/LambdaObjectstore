@@ -3,8 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"github.com/mason-leap-lab/infinicache/common/logger"
-	"github.com/mason-leap-lab/redeo"
 	"io/ioutil"
 	syslog "log"
 	"net"
@@ -13,22 +11,29 @@ import (
 	"path"
 	"sync"
 	"syscall"
-	"time"
+
+	"github.com/mason-leap-lab/infinicache/common/logger"
+	"github.com/mason-leap-lab/redeo"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
-	"github.com/mason-leap-lab/infinicache/proxy/config"
-	"github.com/mason-leap-lab/infinicache/proxy/server"
 	"github.com/mason-leap-lab/infinicache/proxy/collector"
-	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/config"
 	"github.com/mason-leap-lab/infinicache/proxy/dashboard"
+	"github.com/mason-leap-lab/infinicache/proxy/global"
+	"github.com/mason-leap-lab/infinicache/proxy/server"
 )
 
 var (
-	options       = &global.Options
-	log           = &logger.ColorLogger{ Color: true, Level: logger.LOG_LEVEL_INFO }
+	options  = &global.Options
+	log      = &logger.ColorLogger{Color: true, Level: logger.LOG_LEVEL_INFO}
+	sig      = make(chan os.Signal, 1)
+	dash     *dashboard.Dashboard
+	logFile  *os.File
+	panicErr interface{}
 )
 
 func init() {
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGABRT)
 	global.Log = log
 	if config.ServerPublicIp != "" {
 		global.ServerIp = config.ServerPublicIp
@@ -36,6 +41,8 @@ func init() {
 }
 
 func main() {
+	defer finalize(false) // We need to call finalize in every goroutine.
+
 	var done sync.WaitGroup
 	checkUsage(options)
 	if options.Debug {
@@ -43,11 +50,11 @@ func main() {
 	}
 	log.Color = !options.NoColor
 	if options.LogFile != "" {
-		logFile, err := os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			syslog.Panic(err)
+		logFile, panicErr = os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0644)
+		// logFile, panicErr = os.OpenFile(path.Join(options.LogPath, options.LogFile), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+		if panicErr != nil {
+			panic(panicErr)
 		}
-		defer logFile.Close()
 
 		syslog.SetOutput(logFile)
 	}
@@ -61,30 +68,23 @@ func main() {
 	clientLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort))
 	if err != nil {
 		log.Error("Failed to listen clients: %v", err)
-		os.Exit(1)
 		return
 	}
 	lambdaLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
 	if err != nil {
 		log.Error("Failed to listen lambdas: %v", err)
-		os.Exit(1)
 		return
 	}
 	log.Info("Start listening to clients(port 6378) and lambdas(port 6379)")
 
-	// Register signals
-	sig := make(chan os.Signal, 1)
 	// Start Dashboard
-	var dash *dashboard.Dashboard
 	if !options.NoDashboard {
 		dash = dashboard.NewDashboard()
-		defer dash.Close()
 		go func() {
+			defer finalize(false)
 			dash.Start()
 			sig <- syscall.SIGINT
 		}()
-	} else {
-		signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL, syscall.SIGABRT)
 	}
 
 	// initial proxy server
@@ -92,7 +92,7 @@ func main() {
 	prxy := server.New(false)
 	redis := server.NewRedisAdapter(srv, prxy, options.D, options.P)
 	if dash != nil {
-		dash.ConfigCluster(prxy.GetStatusProvider(), 12)
+		dash.ConfigCluster(prxy.GetStatsProvider(), config.NumAvailableBuckets+1) // Show all unexpired instances + 1 expired bucket.
 	}
 
 	// config server
@@ -109,13 +109,14 @@ func main() {
 
 		collector.Stop()
 
-		// // Close server
+		// Close server
 		log.Info("Closing server...")
 		srv.Close(clientLis)
 
-		// // Collect data
-		log.Info("Collecting data...")
-		prxy.CollectData()
+		// Uncomment me: on long running microbenchmarking.
+		// Collect data
+		// log.Info("Collecting data...")
+		// prxy.CollectData()
 
 		prxy.Close(lambdaLis)
 		redis.Close()
@@ -123,7 +124,10 @@ func main() {
 	}()
 
 	// initiate lambda store proxy
-	go prxy.Serve(lambdaLis)
+	go func() {
+		defer finalize(true)
+		prxy.Serve(lambdaLis)
+	}()
 	prxy.WaitReady()
 	if dash != nil {
 		dash.ClusterView.Update()
@@ -139,6 +143,7 @@ func main() {
 
 	// Start serving (blocking)
 	err = srv.ServeAsync(clientLis)
+	log.Debug("Server returned: %v", err)
 	if err != nil {
 		select {
 		case <-sig:
@@ -153,12 +158,6 @@ func main() {
 	// Wait for data collection
 	done.Wait()
 	prxy.Release()
-	server.CleanUpScheduler()
-	if dash != nil {
-		dash.Update()
-		time.Sleep(time.Second)
-	}
-	return
 }
 
 func checkUsage(options *global.CommandlineOptions) {
@@ -169,7 +168,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
-	flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
+	// flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
 	showDashboard := flag.Bool("enable-dashboard", false, "Enable dashboard")
 	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
 	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
@@ -187,18 +186,41 @@ func checkUsage(options *global.CommandlineOptions) {
 		fmt.Fprintf(os.Stderr, "Usage: ./proxy [options]\n")
 		fmt.Fprintf(os.Stderr, "Available options:\n")
 		flag.PrintDefaults()
-		os.Exit(0);
+		os.Exit(0)
 	}
 
 	if !options.NoDashboard {
 		if options.LogFile == "" {
 			options.LogFile = "log"
 		}
-		options.NoColor = true
+		// options.NoColor = true
 	}
 
 	if options.Evaluation && options.FuncCapacity == 0 {
 		fmt.Fprintf(os.Stderr, "Since evaluation is enabled, please specify the capacity of function instance with option \"-funcap\".\n")
-		os.Exit(0);
+		os.Exit(0)
+	}
+}
+
+func finalize(fix bool) {
+	// Dashboard must be closed in any circumstance.
+	if dash != nil {
+		dash.Close()
+		dash = nil
+	}
+
+	// If fixable, try close server normally.
+	if fix {
+		if err := recover(); err != nil {
+			log.Error("%v", err)
+			return
+		}
+	}
+
+	// Rest will be cleared from main routine.
+	if logFile != nil {
+		syslog.SetOutput(os.Stdout)
+		logFile.Close()
+		logFile = nil
 	}
 }

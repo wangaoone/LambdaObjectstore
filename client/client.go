@@ -2,74 +2,44 @@ package client
 
 import (
 	"errors"
+	"net"
+
 	"github.com/buraksezer/consistent"
+	mock "github.com/jordwest/mock-conn"
 	"github.com/klauspost/reedsolomon"
 	"github.com/mason-leap-lab/redeo/resp"
-	"github.com/seiflotfy/cuckoofilter"
-	"io"
-	"net"
-	"time"
+
+	// cuckoo "github.com/seiflotfy/cuckoofilter"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
-type Conn struct {
-	conn net.Conn
-	W    *resp.RequestWriter
-	R    resp.ResponseReader
-}
-
-func NewConn(cn net.Conn) *Conn {
-	return &Conn{
-		conn: cn,
-		W:    NewRequestWriter(cn),
-		R:    NewResponseReader(cn),
-	}
-}
-
-func (c *Conn) Close() {
-	c.conn.Close()
-}
-
-type DataEntry struct {
-	Cmd        string
-	ReqId      string
-	Begin      time.Time
-	ReqLatency time.Duration
-	RecLatency time.Duration
-	Duration   time.Duration
-	AllGood    bool
-	Corrupted  bool
-}
-
+// Client InfiniCache client
 type Client struct {
-	//ConnArr  []net.Conn
-	//W        []*resp.RequestWriter
-	//R        []resp.ResponseReader
-	Conns        map[string][]*Conn
 	EC           reedsolomon.Encoder
-	MappingTable map[string]*cuckoo.Filter
 	Ring         *consistent.Consistent
-	Data         DataEntry
-	DataShards     int
-	ParityShards   int
-	Shards         int
+	DataShards   int
+	ParityShards int
+	Shards       int
+
+	conns map[string][]*clientConn
+	// mappingTable map[string]*cuckoo.Filter
+	logEntry logEntry
 }
 
+// NewClient Create a client instance.
 func NewClient(dataShards int, parityShards int, ecMaxGoroutine int) *Client {
 	return &Client{
-		//ConnArr:  make([]net.Conn, dataShards+parityShards),
-		//W:        make([]*resp.RequestWriter, dataShards+parityShards),
-		//R:        make([]resp.ResponseReader, dataShards+parityShards),
-		Conns:        make(map[string][]*Conn),
-		EC:           NewEncoder(dataShards, parityShards, ecMaxGoroutine),
-		MappingTable: make(map[string]*cuckoo.Filter),
+		conns: make(map[string][]*clientConn),
+		EC:    NewEncoder(dataShards, parityShards, ecMaxGoroutine),
+		// mappingTable: make(map[string]*cuckoo.Filter),
 		DataShards:   dataShards,
 		ParityShards: parityShards,
 		Shards:       dataShards + parityShards,
 	}
 }
 
+// Dial Dial proxies
 func (c *Client) Dial(addrArr []string) bool {
 	//t0 := time.Now()
 	cfg := consistent.Config{
@@ -82,7 +52,7 @@ func (c *Client) Dial(addrArr []string) bool {
 	for i, addr := range addrArr {
 		log.Debug("Dialing %s...", addr)
 		newaddr, err := c.initDial(addr)
-		members[i] = Member(newaddr)
+		members[i] = clientMember(newaddr)
 		if err != nil {
 			log.Error("Fail to dial %s: %v", addr, err)
 			c.Close()
@@ -99,6 +69,17 @@ func (c *Client) Dial(addrArr []string) bool {
 	return true
 }
 
+// Close Close the client
+func (c *Client) Close() {
+	log.Info("Cleaning up...")
+	for addr, conns := range c.conns {
+		for i := range conns {
+			c.disconnect(addr, i)
+		}
+	}
+	log.Info("Client closed.")
+}
+
 //func (c *Client) initDial(address string, wg *sync.WaitGroup) {
 func (c *Client) initDial(address string) (addr string, err error) {
 	// initialize parallel connections under address
@@ -110,77 +91,100 @@ func (c *Client) initDial(address string) (addr string, err error) {
 		addr = address
 	}
 	// Connect use original address
-	c.Conns[addr], err = connect(address, c.Shards)
-	if err == nil {
-		// initialize the cuckoo filter under address
-		c.MappingTable[addr] = cuckoo.NewFilter(1000000)
-	}
+	c.conns[addr], err = connect(address, c.Shards)
+	// if err == nil {
+	// 	// initialize the cuckoo filter under address
+	// 	c.mappingTable[addr] = cuckoo.NewFilter(1000000)
+	// }
 	return
 }
 
-func (c *Client) connect(address string, n int) ([]*Conn, error) {
-	conns := make([]*Conn, n)
+func (c *Client) connect(address string, n int) ([]*clientConn, error) {
+	conns := make([]*clientConn, n)
 	for i := 0; i < n; i++ {
 		cn, err := net.Dial("tcp", address)
 		if err != nil {
 			return conns, err
 		}
-		conns[i] = NewConn(cn)
+		conns[i] = newClientConn(cn)
 	}
 	return conns, nil
 }
 
-func (c *Client) connectShortcut(address string, n int) ([]*Conn, error) {
+func (c *Client) connectShortcut(address string, n int) ([]*clientConn, error) {
 	shortcuts, ok := protocol.Shortcut.Dial(address)
 	if !ok {
 		return nil, errors.New("oops, check the RedisAdapter")
 	}
-	conns := make([]*Conn, n)
+	conns := make([]*clientConn, n)
 	for i := 0; i < n && i < len(shortcuts); i++ {
-		conns[i] = NewConn(shortcuts[i].Client)
+		conns[i] = newClientConn(shortcuts[i].Client)
 	}
 	return conns, nil
 }
 
 func (c *Client) disconnect(address string, i int) {
-	if c.Conns[address][i] != nil {
-		c.Conns[address][i].Close()
-		c.Conns[address][i] = nil
+	if c.conns[address][i] != nil {
+		c.conns[address][i] = c.conns[address][i].Close() // Noted a shortcut will not be closed.
 	}
 }
 
 func (c *Client) validate(address string, i int) (err error) {
-	if c.Conns[address][i] == nil {
+	// Because shortcut can not be closed, we don't consider it here.
+	if c.conns[address][i] == nil {
 		var conn net.Conn
 		conn, err = net.Dial("tcp", address)
 		if err == nil {
-			c.Conns[address][i] = NewConn(conn)
+			c.conns[address][i] = newClientConn(conn)
 		}
 	}
 	return
 }
 
-func (c *Client) Close() {
-	log.Info("Cleaning up...")
-	for addr, conns := range c.Conns {
-		for i, _ := range conns {
-			c.disconnect(addr, i)
-		}
+type clientConn struct {
+	conn     net.Conn
+	shortcut bool
+	W        *resp.RequestWriter
+	R        resp.ResponseReader
+}
+
+func newClientConn(cn net.Conn) *clientConn {
+	_, shortcut := cn.(*mock.End)
+	return &clientConn{
+		conn:     cn,
+		shortcut: shortcut,
+		W:        resp.NewRequestWriter(cn),
+		R:        resp.NewResponseReader(cn),
 	}
-	log.Info("Client closed.")
+}
+
+// Close close connection and return value for reset
+func (c *clientConn) Close() *clientConn {
+	// No need to close shortcut. It is supposed to be usable always.
+	if c.shortcut {
+		return c
+	}
+	c.conn.Close()
+	return nil
+}
+
+type clientMember string
+
+func (m clientMember) String() string {
+	return string(m)
 }
 
 type ecRet struct {
-	Shards          int
-	Rets            []interface{}
-	Err             error
-	Size            int    // only for get chunk
+	Shards int
+	Rets   []interface{}
+	Err    error
+	Size   int // only for get chunk
 }
 
 func newEcRet(shards int) *ecRet {
 	return &ecRet{
 		Shards: shards,
-		Rets: make([]interface{}, shards),
+		Rets:   make([]interface{}, shards),
 	}
 }
 
@@ -205,12 +209,4 @@ func (r *ecRet) Ret(i int) (ret []byte) {
 func (r *ecRet) Error(i int) (err error) {
 	err, _ = r.Rets[i].(error)
 	return
-}
-
-type ReadAllCloser interface {
-	io.Reader
-	io.Closer
-
-	Len() int
-	ReadAll() ([]byte, error)
 }

@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+type ControlCallback func(*Control, interface{})
+
 type Control struct {
 	Cmd        string
 	Addr       string
@@ -13,7 +15,8 @@ type Control struct {
 	Id         uint64
 	Payload    []byte
 	*Request
-	conn       Conn
+	conn     Conn
+	Callback ControlCallback
 }
 
 func (req *Control) String() string {
@@ -44,9 +47,15 @@ func (ctrl *Control) PrepareForDel(conn Conn) {
 	ctrl.conn = conn
 }
 
+func (ctrl *Control) PrepareForRecover(conn Conn) {
+	ctrl.Request.PrepareForRecover(conn)
+	ctrl.Request.conn = nil
+	ctrl.conn = conn
+}
+
 func (ctrl *Control) Flush(timeout time.Duration) (err error) {
 	if ctrl.conn == nil {
-		return errors.New("Connection for control not set.")
+		return errors.New("connection for control not set")
 	}
 	conn := ctrl.conn
 	ctrl.conn = nil

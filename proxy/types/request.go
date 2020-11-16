@@ -2,34 +2,40 @@ package types
 
 import (
 	"errors"
-	"github.com/mason-leap-lab/redeo"
-	"github.com/mason-leap-lab/redeo/resp"
 	"strconv"
 	"sync/atomic"
 	"time"
+
+	"github.com/mason-leap-lab/redeo"
+	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const (
-	REQUEST_INVOKED = 0
-	REQUEST_RETURNED = 1
+	REQUEST_INVOKED   = 0
+	REQUEST_RETURNED  = 1
 	REQUEST_RESPONDED = 2
+
+	CHANGE_PLACEMENT = 0x0001
 )
 
 type Request struct {
-	Id           Id
-	InsId        uint64   // Instance the request targeted.
-	Cmd          string
-	Key          string
-	Body         []byte
-	BodyStream   resp.AllReadCloser
-	Client       *redeo.Client
-	EnableCollector bool
-	Info         interface{}
+	Id             Id
+	InsId          uint64 // Instance the request targeted.
+	Cmd            string
+	Key            string
+	RetCommand     string
+	BodySize       int64
+	Body           []byte
+	BodyStream     resp.AllReadCloser
+	Client         *redeo.Client
+	Info           interface{}
+	Changes        int
+	CollectorEntry interface{}
 
-	conn         Conn
-	status        uint32
+	conn             Conn
+	status           uint32
 	streamingStarted bool
 }
 
@@ -45,10 +51,21 @@ func (req *Request) Retriable() bool {
 	return req.BodyStream == nil || !req.streamingStarted
 }
 
+func (req *Request) Size() int64 {
+	if req.BodyStream != nil {
+		return req.BodyStream.Len()
+	} else if req.Body != nil {
+		return int64(len(req.Body))
+	} else if req.BodySize > 0 {
+		return req.BodySize
+	} else {
+		return 0
+	}
+}
+
 func (req *Request) PrepareForSet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(6)
+	conn.Writer().WriteMultiBulkSize(5)
 	conn.Writer().WriteBulkString(req.Cmd)
-	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
@@ -59,28 +76,45 @@ func (req *Request) PrepareForSet(conn Conn) {
 }
 
 func (req *Request) PrepareForGet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(5)
+	conn.Writer().WriteMultiBulkSize(4)
 	conn.Writer().WriteBulkString(req.Cmd)
-	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
-	conn.Writer().WriteBulkString(req.Id.ReqId)
-	conn.Writer().WriteBulkString("")
-	conn.Writer().WriteBulkString(req.Key)
-	req.conn = conn
-}
-
-func (req *Request) PrepareForDel(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(5)
-	conn.Writer().WriteBulkString(req.Cmd)
-	conn.Writer().WriteBulkString(strconv.Itoa(req.Id.ConnId))
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
 	req.conn = conn
 }
 
+func (req *Request) PrepareForDel(conn Conn) {
+	conn.Writer().WriteMultiBulkSize(4)
+	conn.Writer().WriteBulkString(req.Cmd)
+	conn.Writer().WriteBulkString(req.Id.ReqId)
+	conn.Writer().WriteBulkString(req.Id.ChunkId)
+	conn.Writer().WriteBulkString(req.Key)
+	req.conn = conn
+}
+
+func (req *Request) ToRecover(toInsId uint64) *Request {
+	req.InsId = toInsId
+	req.Cmd = protocol.CMD_RECOVER
+	req.RetCommand = protocol.CMD_GET
+	req.Changes = req.Changes & CHANGE_PLACEMENT
+	return req
+}
+
+func (req *Request) PrepareForRecover(conn Conn) {
+	conn.Writer().WriteMultiBulkSize(6)
+	conn.Writer().WriteBulkString(req.Cmd)
+	conn.Writer().WriteBulkString(req.Id.ReqId)
+	conn.Writer().WriteBulkString(req.Id.ChunkId)
+	conn.Writer().WriteBulkString(req.Key)
+	conn.Writer().WriteBulkString(req.RetCommand)
+	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
+	req.conn = conn
+}
+
 func (req *Request) Flush(timeout time.Duration) error {
 	if req.conn == nil {
-		return errors.New("Connection for request not set.")
+		return errors.New("connection for request not set")
 	}
 	conn := req.conn
 	req.conn = nil
@@ -122,7 +156,7 @@ func (req *Request) MarkReturned() {
 }
 
 func (req *Request) IsResponse(rsp *Response) bool {
-	return req.Cmd == rsp.Cmd &&
+	return (req.Cmd == rsp.Cmd || req.RetCommand == rsp.Cmd) &&
 		req.Id.ReqId == rsp.Id.ReqId &&
 		req.Id.ChunkId == rsp.Id.ChunkId
 }
@@ -133,7 +167,7 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 		return false
 	}
 	if req.Client != nil {
-		ret := req.Client.AddResponses(&ProxyResponse{ rsp, req })
+		ret := req.Client.AddResponses(&ProxyResponse{rsp, req})
 
 		// Release reference so chan can be garbage collected.
 		req.Client = nil
@@ -148,5 +182,5 @@ func (req *Request) Abandon() bool {
 	if req.Cmd != protocol.CMD_GET {
 		return false
 	}
-	return req.SetResponse(&Response{ Id: req.Id, Cmd: req.Cmd })
+	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
 }
