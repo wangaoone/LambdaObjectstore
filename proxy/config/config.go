@@ -22,7 +22,7 @@ const NumLambdaClusters = 12
 const LambdaStoreName = "LambdaStore"
 
 // LambdaPrefix Prefix of Lambda function.
-const LambdaPrefix = "CacheNode"
+var LambdaPrefix = "CacheNode"
 
 // InstanceWarmTimout Interval to warmup Lambda functions.
 const InstanceWarmTimeout = 1 * time.Minute
