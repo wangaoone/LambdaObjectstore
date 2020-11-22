@@ -58,7 +58,7 @@ func main() {
 
 		syslog.SetOutput(logFile)
 	}
-
+	log.Info("config.LambdaPrefix = %s", config.LambdaPrefix)
 	// CPU profiling by default
 	//defer profile.Start().Stop()
 
@@ -75,7 +75,7 @@ func main() {
 		log.Error("Failed to listen lambdas: %v", err)
 		return
 	}
-	log.Info("Start listening to clients(port 6378) and lambdas(port 6379)")
+	log.Info("Start listening to clients(port 6378) and lambdas(port 6379)!!!")
 
 	// Start Dashboard
 	if !options.NoDashboard {
@@ -191,7 +191,7 @@ func checkUsage(options *global.CommandlineOptions) {
 	}
 
 	config.LambdaPrefix = options.LambdaPrefix
-	fmt.Fprintf(os.Stdout, fmt.Sprintf("config.LambdaPrefix = %s", config.LambdaPrefix))
+	log.Info("config.LambdaPrefix = %s", config.LambdaPrefix)
 
 	if !options.NoDashboard {
 		if options.LogFile == "" {
