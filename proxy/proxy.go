@@ -58,7 +58,9 @@ func main() {
 
 		syslog.SetOutput(logFile)
 	}
-	log.Info("config.LambdaPrefix = %s", config.LambdaPrefix)
+	log.Info("config.LambdaPrefix (initially) = %s", config.LambdaPrefix)
+	config.LambdaPrefix = options.LambdaPrefix
+	log.Info("config.LambdaPrefix (after passing value from command-line) = %s", config.LambdaPrefix)
 	// CPU profiling by default
 	//defer profile.Start().Stop()
 
