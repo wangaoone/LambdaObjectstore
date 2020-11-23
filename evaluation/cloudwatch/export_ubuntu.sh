@@ -5,7 +5,7 @@ LOG_PREFIX="Store1VPCNode"
 
 PREFIX=$1
 start=$2
-end=$3
+end=$3 
 
 # Convert date into seconds (Format is %s)
 startTime=$(date -d "$start" +%s)000
