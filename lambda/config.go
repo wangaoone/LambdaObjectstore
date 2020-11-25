@@ -6,14 +6,14 @@ import (
 )
 
 const (
-	LIFESPAN            = 5 * time.Minute
+	LIFESPAN = 5 * time.Minute
 )
 
 var (
-	S3_COLLECTOR_BUCKET string      = "ben.infinicache.collector"
-	S3_BACKUP_BUCKET string         = "ben.infinicache.backup%s"
+	S3_COLLECTOR_BUCKET string = "ben.infinicache.collector"
+	S3_BACKUP_BUCKET    string = "ben.infinicache.backup%s"
 
-	DRY_RUN            = true
+	DRY_RUN = false
 )
 
 func init() {
