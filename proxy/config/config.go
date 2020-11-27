@@ -71,4 +71,4 @@ const ActiveReplica = 2 //min
 // of private ip addr. and port.
 //var ProxyList []string
 //var ProxyList []string = make([]string, 0) // []string{"10.0.119.246:6378", "10.0.113.107:6378"}
-var ProxyList []string = []string{"10.0.109.88:6378", "10.0.110.213:6378", "10.0.121.245:6378", "10.0.107.214:6378"}
+var ProxyList []string = []string{"10.0.109.88:6378"}
