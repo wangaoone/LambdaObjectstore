@@ -168,7 +168,7 @@ func checkUsage(options *global.CommandlineOptions) {
 
 	flag.BoolVar(&options.Debug, "debug", true, "Enable debug and print debug logs.")
 	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
-	flag.StringVar(&options.LambdaPrefix, "lambda-prefix", "CacheNode", "Prefix of the Lambda functions.")
+	flag.StringVar(&options.LambdaPrefix, "lambda-prefix", "CacheNode0-", "Prefix of the Lambda functions.")
 	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
 	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
 	// flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
