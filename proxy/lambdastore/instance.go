@@ -37,6 +37,7 @@ const (
 	INSTANCE_UNSTARTED = 0
 	INSTANCE_RUNNING   = 1
 	INSTANCE_CLOSED    = 2
+	INSTANCE_SHADOW    = 15
 
 	// Connection status
 	// Activate: Sleeping -> Activating -> Active
@@ -76,11 +77,12 @@ const (
 )
 
 var (
-	IM                    InstanceManager
+	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
 	DefaultConnectTimeout = 20 * time.Millisecond // Just above average triggering cost.
 	MaxConnectTimeout     = 1 * time.Second
 	RequestTimeout        = 1 * time.Second
+	ValidationTimeout     = 80 * time.Millisecond // The minimum interval between validations.
 	BackoffFactor         = 2
 	MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 	DefaultPingPayload    = []byte{}
@@ -95,13 +97,29 @@ var (
 	ErrDuplicatedSession = errors.New("session has started")
 	ErrNotCtrlLink       = errors.New("not control link")
 	ErrInstanceValidated = errors.New("instance has been validated by another connection")
+	ErrInstanceBusy      = errors.New("instance busy")
+	ErrUnexpectedReturn  = errors.New("unexpected return from validation")
+	ErrUnknown           = errors.New("unknown error")
 )
 
 type InstanceManager interface {
-	Instance(uint64) (*Instance, bool)
-	TryRelocate(interface{}, int) (*Instance, bool)
-	Relocate(interface{}, int) *Instance
+	Instance(uint64) *Instance
 	Recycle(types.LambdaDeployment) error
+}
+
+type Relocator interface {
+	// Relocate relocate the chunk specified by the meta(interface{}) and chunkId(int).
+	// Return the instance the chunk is relocated to.
+	Relocate(interface{}, int, types.Command) (*Instance, error)
+
+	// TryRelocate Test and relocate the chunk specified by the meta(interface{}) and chunkId(int).
+	// Return the instance, trigggered or not(bool), and error if the chunk is triggered.
+	TryRelocate(interface{}, int, types.Command) (*Instance, bool, error)
+}
+
+type ClusterManager interface {
+	InstanceManager
+	Relocator
 }
 
 type ValidateOption struct {
@@ -117,23 +135,21 @@ type ValidateOption struct {
 type Instance struct {
 	*Deployment
 	Meta
-	ChunkCounter int
-	KeyMap       []string
 
-	ctrlLink     *Connection
-	dataLink     *Connection
 	chanCmd      chan types.Command
 	chanPriorCmd chan types.Command // Channel for priority commands: control and forwarded backing requests.
 	status       uint32             // Status of proxy side instance which can be one of unstarted, running, and closed.
 	awakeness    uint32             // Status of lambda node which can be one of sleeping, activating, active, and maybe.
 	phase        uint32             // Status of serving mode which can be one of active, backing only, reclaimed, and expired.
-	validated    *promise.ChannelPromise
+	validated    promise.Promise
 	mu           sync.Mutex
 	closed       chan struct{}
 	coolTimer    *time.Timer
 	coolTimeout  time.Duration
 
 	// Connection management
+	ctrlLink *Connection
+	dataLink *Connection
 	sessions *hashmap.HashMap
 
 	// Backup fields
@@ -164,20 +180,22 @@ func NewInstanceFromDeployment(dp *Deployment, id uint64) *Instance {
 		awakeness:    INSTANCE_SLEEPING,
 		chanCmd:      make(chan types.Command, 1),
 		chanPriorCmd: make(chan types.Command, 1),
-		validated:    promise.ResolvedChannel(), // Initialize with a closed channel.
+		validated:    promise.Resolved(), // Initialize with a resolved promise.
 		closed:       make(chan struct{}),
 		coolTimer:    time.NewTimer(time.Duration(rand.Int63n(int64(WarmTimeout)) + int64(WarmTimeout)/2)), // Differentiate the time to start warming up.
 		coolTimeout:  WarmTimeout,
 		sessions:     hashmap.New(TEMP_MAP_SIZE),
 		writtens:     hashmap.New(TEMP_MAP_SIZE),
-
-		KeyMap: make([]string, 0, 3000),
 	}
 }
 
 // create new lambda instance
 func NewInstance(name string, id uint64) *Instance {
 	return NewInstanceFromDeployment(NewDeployment(name, id), id)
+}
+
+func (ins *Instance) GetShadowInstance() *Instance {
+	return &Instance{status: INSTANCE_SHADOW}
 }
 
 func (ins *Instance) String() string {
@@ -233,11 +251,25 @@ func (ins *Instance) AssignBackups(numBak int, candidates []*Instance) {
 }
 
 func (ins *Instance) Dispatch(cmd types.Command) error {
+	return ins.DispatchWithOptions(cmd, false)
+}
+
+func (ins *Instance) DispatchWithOptions(cmd types.Command, errorOnBusy bool) error {
 	if ins.IsClosed() {
 		return ErrInstanceClosed
 	}
 
-	ins.chanCmd <- cmd
+	select {
+	case ins.chanCmd <- cmd:
+		// continue after select
+	default:
+		if errorOnBusy {
+			return ErrInstanceBusy
+		}
+
+		// wait to be inserted and continue after select
+		ins.chanCmd <- cmd
+	}
 
 	// This check is thread safe for if it is not closed now, HandleRequests() will do the cleaning up.
 	if ins.IsClosed() {
@@ -246,6 +278,10 @@ func (ins *Instance) Dispatch(cmd types.Command) error {
 
 	// Once the cmd is sent to chanCmd, HandleRequests() or cleanCmdChannel() will handle the possible error.
 	return nil
+}
+
+func (ins *Instance) IsBusy() bool {
+	return len(ins.chanCmd) > 0
 }
 
 func (ins *Instance) WarmUp() {
@@ -556,7 +592,7 @@ func (ins *Instance) closeLocked() {
 	ins.log.Info("[%v]", ins)
 
 	// Recycle instance
-	IM.Recycle(ins)
+	CM.Recycle(ins)
 }
 
 // Support concurrent cleaning up.
@@ -593,7 +629,7 @@ func (ins *Instance) endSession(sid string) {
 	ins.sessions.Del(sid)
 }
 
-func castValidatedConnection(validated *promise.ChannelPromise) (*Connection, error) {
+func castValidatedConnection(validated promise.Promise) (*Connection, error) {
 	cn, err := validated.Result()
 	if cn == nil {
 		return nil, err
@@ -612,8 +648,11 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 		return nil, ErrInstanceClosed
 	}
 
-	if ins.validated.IsResolved() {
-		// REVIEW: For reclaimed yet not closed instance, requests can be control request or requests of backing instances.
+	lastResolved := ins.validated.ResolvedAt()
+	// 1. resolved
+	// 2. last validation succeeded and time since lastResolved >= ValidationTimeout
+	// 3. or something wrong on last validating (must be ignorable)
+	if (lastResolved != time.Time{} && (ins.validated.Error() != nil || time.Since(lastResolved) >= ValidationTimeout)) {
 		// For reclaimed instance, simply return the result of last validation.
 		// if ins.IsReclaimed() {
 		// 	return castValidatedConnection(ins.validated)
@@ -629,7 +668,7 @@ func (ins *Instance) validate(opt *ValidateOption) (*Connection, error) {
 			ins.log.Debug("Validating...")
 			// Try invoking the lambda node.
 			// Closed safe: It is ok to invoke lambda, closed status will be checked in TryFlagValidated on processing the PONG.
-			triggered := ins.tryTriggerLambda(ins.validated.Options.(*ValidateOption))
+			triggered := ins.tryTriggerLambda(ins.validated.Options().(*ValidateOption))
 			if triggered {
 				// Waiting to be validated
 				return castValidatedConnection(ins.validated)
@@ -729,14 +768,15 @@ func (ins *Instance) triggerLambda(opt *ValidateOption) {
 				ins.log.Error("[%v]Unexpected status.", ins)
 			}
 			return
-		} else if ins.validated.Options.(*ValidateOption).WarmUp { // Use ValidationOption of most recent validation to reflect up to date status.
+		} else if ins.validated.Options().(*ValidateOption).WarmUp { // Use ValidationOption of most recent validation to reflect up to date status.
 			// No retry for warming up.
 			// Possible reasons
 			// 1. Pong is delayed and lambda is returned without requesting for recovery, or the lambda will wait for the ending of the recovery.
 			ins.mu.Lock()
 			// Does not affect the MAYBE status.
 			atomic.StoreUint32(&ins.awakeness, INSTANCE_SLEEPING)
-			ins.flagValidatedLocked(nil) // No need to return a validated connection.
+			// No need to return a validated connection. If someone do require the connection, it is an unexpected error.
+			ins.flagValidatedLocked(nil, ErrUnexpectedReturn)
 			ins.mu.Unlock()
 
 			ins.log.Debug("[%v]Detected unvalidated warmup, ignored.", ins)
@@ -1046,6 +1086,13 @@ func (ins *Instance) handleRequest(cmd types.Command) {
 				req.SetResponse(err)
 			}
 			return
+		} else if ctrlLink == nil {
+			// Unexpected error
+			if req, ok := cmd.(*types.Request); ok {
+				req.SetResponse(ErrUnknown)
+			}
+			ins.log.Warn("Unexpected nil control link with no error returned.")
+			return
 		}
 
 		// Make request
@@ -1096,12 +1143,6 @@ func (ins *Instance) rerouteGetRequest(req *types.Request) bool {
 	return true
 }
 
-func (ins *Instance) rerouteRequestWithTarget(req *types.Request, target *Instance) bool {
-	target.chanPriorCmd <- req // Rerouted request should not be queued again.
-	ins.log.Debug("Rerouted %s to node %d for %s.", req.Key, target.Id(), req.Cmd)
-	return true
-}
-
 func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 	// Backing keys will not be relocated.
 	// If the instance is expiring or reclaimed, main repository only is affected.
@@ -1109,10 +1150,13 @@ func (ins *Instance) relocateGetRequest(req *types.Request) bool {
 		return false
 	}
 
-	target := IM.Relocate(req.Info, req.Id.Chunk())
-	req.ToRecover(target.Id())
-	ins.log.Debug("Instance reclaimed, relocated %v to %d.", req.Key, req.InsId)
-	ins.rerouteRequestWithTarget(req, target)
+	target, err := CM.Relocate(req.Info, req.Id.Chunk(), req.ToRecover())
+	if err != nil {
+		ins.log.Warn("Instance reclaimed, tried relocated %v but failed: %v", req.Key, err)
+		return false
+	}
+
+	ins.log.Debug("Instance reclaimed, relocated %v to %d", req.Key, target.Id())
 	return true
 }
 

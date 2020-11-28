@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
@@ -49,20 +50,45 @@ type MigrationScheduler interface {
 }
 
 type ClusterStats interface {
-	Len() int
+	InstanceLen() int
 	InstanceStats(int) InstanceStats
 	AllInstancesStats() Iterator
 	InstanceStatsFromIterator(Iterator) (int, InstanceStats)
 }
 
 type GroupedClusterStats interface {
-	Len() int
+	ClusterLen() int
 	ClusterStats(int) ClusterStats
 	AllClustersStats() Iterator
 	ClusterStatsFromIterator(Iterator) (int, ClusterStats)
-	InstanceSum(int) int
 }
 
 type InstanceStats interface {
 	Status() uint64
+}
+
+type ScaleEvent struct {
+	// BaseInstance Instance that triggers the scaling event.
+	BaseInstance interface{}
+
+	// ScaleTarget The number of instances to scale.
+	ScaleTarget int
+
+	// Scaled A promise object that can be used to wait for the completion of the scaling event.
+	Scaled promise.Promise
+
+	// Retire If there is insufficient space in BaseInstance, set to true to retire it.
+	Retire bool
+}
+
+func (evt *ScaleEvent) SetError(err error) {
+	if evt.Scaled != nil {
+		evt.Scaled.Resolve(nil, err)
+	}
+}
+
+func (evt *ScaleEvent) SetScaled() {
+	if evt.Scaled != nil {
+		evt.Scaled.Resolve()
+	}
 }

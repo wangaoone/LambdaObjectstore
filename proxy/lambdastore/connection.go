@@ -336,7 +336,7 @@ func (conn *Connection) pongHandler() {
 	instance := conn.instance
 	if instance == nil {
 		// Look up lambda instance
-		instance, _ = IM.Instance(uint64(storeId))
+		instance = CM.Instance(uint64(storeId))
 	}
 	if instance == nil {
 		conn.log.Error("Failed to match lambda: %d", storeId)

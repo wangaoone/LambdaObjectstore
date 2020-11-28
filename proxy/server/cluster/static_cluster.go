@@ -26,6 +26,8 @@ type StaticCluster struct {
 
 // initial lambda group
 func NewStaticCluster(size int) *StaticCluster {
+	initPool()
+
 	extra := 0
 	if global.Options.Evaluation && global.Options.NumBackups > 0 {
 		extra = global.Options.NumBackups
@@ -99,6 +101,10 @@ func (c *StaticCluster) Close() {
 }
 
 // ClusterStatus implementation
+func (c *StaticCluster) InstanceLen() int {
+	return c.group.Len()
+}
+
 func (c *StaticCluster) InstanceStats(idx int) types.InstanceStats {
 	return c.group.all[idx].Instance()
 }
@@ -127,25 +133,22 @@ func (c *StaticCluster) InstanceStatsFromIterator(iter types.Iterator) (int, typ
 }
 
 // lambdastore.InstanceManager implementation
-func (c *StaticCluster) Len() int {
-	return c.group.Len()
-}
-
-func (c *StaticCluster) Instance(id uint64) (*lambdastore.Instance, bool) {
+func (c *StaticCluster) Instance(id uint64) *lambdastore.Instance {
 	return pool.Instance(id)
-}
-
-func (c *StaticCluster) Relocate(obj interface{}, chunk int) *lambdastore.Instance {
-	// Not support.
-	return nil
-}
-
-func (c *StaticCluster) TryRelocate(o interface{}, chunkId int) (*lambdastore.Instance, bool) {
-	return nil, false
 }
 
 func (c *StaticCluster) Recycle(ins types.LambdaDeployment) error {
 	return ErrUnsupported
+}
+
+// lambdastore.Relocator implementation
+func (c *StaticCluster) Relocate(obj interface{}, chunk int, cmd types.Command) (*lambdastore.Instance, error) {
+	// Not support.
+	return nil, ErrUnsupported
+}
+
+func (c *StaticCluster) TryRelocate(o interface{}, chunkId int, cmd types.Command) (*lambdastore.Instance, bool, error) {
+	return nil, false, ErrUnsupported
 }
 
 // metastore.InstanceManger implementation
