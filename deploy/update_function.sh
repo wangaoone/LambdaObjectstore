@@ -6,7 +6,7 @@ KEY="lambda"
 cluster=100
 mem=2048
 
-if [ $2 -eq 0 ]; then
+if [ -z $2 ]; then
     echo "No prefix argument supplied. Using default prefix 'CacheNode' instead."
 else
     PREFIX="$2"
