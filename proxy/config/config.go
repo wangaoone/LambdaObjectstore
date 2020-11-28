@@ -70,5 +70,5 @@ const ActiveReplica = 2 //min
 // If running on one proxy, then can be left empty. But for multiple, build static proxy list here
 // of private ip addr. and port.
 //var ProxyList []string
-//var ProxyList []string = make([]string, 0) // []string{"10.0.119.246:6378", "10.0.113.107:6378"}
-var ProxyList []string = []string{"10.0.109.88:6378", "10.0.106.200:6378", "10.0.120.129:6378", "10.0.118.74:6378"}
+var ProxyList []string = make([]string, 0) // []string{"10.0.119.246:6378", "10.0.113.107:6378"}
+//var ProxyList []string = []string{"10.0.109.88:6378", "10.0.106.200:6378", "10.0.120.129:6378", "10.0.118.74:6378"}
