@@ -6,6 +6,12 @@ KEY="lambda"
 cluster=100
 mem=2048
 
+if ![ -z "$2" ]; then 
+    PREFIX="$2"
+else 
+    echo "No prefix argument supplied. Using default prefix 'CacheNode' instead."
+fi 
+
 S3="infinistore-storage-ben"
 
 cd $BASE/../lambda
