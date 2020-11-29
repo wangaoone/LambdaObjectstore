@@ -7,18 +7,6 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-type clientMember string
-
-func (m clientMember) String() string {
-	return string(m)
-}
-
-type hasher struct{}
-
-func (h hasher) Sum64(data []byte) uint64 {
-	return xxhash.Sum64(data)
-}
-
 func TestClient(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Client Suite")
