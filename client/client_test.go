@@ -19,6 +19,11 @@ func (h hasher) Sum64(data []byte) uint64 {
 	return xxhash.Sum64(data)
 }
 
+func TestClient(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Client Suite")
+}
+
 var _ = Describe("ConsistentHashRing", func() {
 	It("Should return the same proxy for the given key.", func() {
 		cfg := consistent.Config{
@@ -43,7 +48,7 @@ var _ = Describe("ConsistentHashRing", func() {
 		//host2 := member2.String()
 
 		for i := 0; i < 10; i++ {
-			Expect(ring.LocateKey([]byte(key)).String()).To(Equal("10.0.109.88:6378"))
+			Expect(ring.LocateKey([]byte(key)).String()).To(Equal("10.0.109.89:6378"))
 		}
 	})
 })
