@@ -2,9 +2,9 @@ package client
 
 import (
 	"github.com/buraksezer/consistent"
-	"github.com/cespare/xxhash"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+	"testing"
 )
 
 func TestClient(t *testing.T) {
