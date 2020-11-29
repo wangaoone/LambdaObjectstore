@@ -1,4 +1,4 @@
-package cluster
+package client
 
 import (
 	"github.com/buraksezer/consistent"
