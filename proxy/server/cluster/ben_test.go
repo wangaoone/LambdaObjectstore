@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"github.com/buraksezer/consistent"
+	"github.com/cespare/xxhash"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
@@ -26,7 +27,7 @@ var _ = Describe("ConsistentHashRing", func() {
 			Load:              1.25,
 			Hasher:            hasher{},
 		}
-		members := make([]consistent.Member, len(2))
+		members := make([]consistent.Member, 2)
 
 		members[0] = clientMember("10.0.109.88:6378")
 		members[1] = clientMember("10.0.109.89:6378")
