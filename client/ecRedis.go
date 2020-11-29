@@ -78,7 +78,8 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 	member := c.Ring.LocateKey([]byte(key))
 	host := member.String()
 	// log.Debug("ring LocateKey costs: %v", time.Since(stats.Begin))
-	// log.Debug("SET located host: %s", host)
+	//log.Debug("SET located host: %s for key \"%s\"", host, key)
+	fmt.Printf("SET located host: %s for key \"%s\"\n", host, key)
 
 	shards, err := c.encode(val)
 	if err != nil {
@@ -141,7 +142,7 @@ func (c *Client) EcGet(key string, args ...interface{}) (string, ReadAllCloser, 
 	member := c.Ring.LocateKey([]byte(key))
 	host := member.String()
 	//fmt.Println("ring LocateKey costs:", time.Since(t))
-	//fmt.Println("GET located host: ", host)
+	fmt.Printf("GET located host: %s for key \"%s\"\n", host, key)
 
 	// Send request and wait
 	var wg sync.WaitGroup
