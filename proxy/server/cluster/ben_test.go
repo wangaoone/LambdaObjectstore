@@ -32,9 +32,9 @@ var _ = Describe("ConsistentHashRing", func() {
 		members[0] = clientMember("10.0.109.88:6378")
 		members[1] = clientMember("10.0.109.89:6378")
 
-		ring = consistent.New(members, cfg)
+		ring := consistent.New(members, cfg)
 
-		key = "mr.srt-res-0"
+		key := "mr.srt-res-0"
 
 		//member1 := c.Ring.LocateKey([]byte(key))
 		//host1 := member1.String()
