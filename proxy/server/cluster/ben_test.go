@@ -12,6 +12,12 @@ func (m clientMember) String() string {
 	return string(m)
 }
 
+type hasher struct{}
+
+func (h hasher) Sum64(data []byte) uint64 {
+	return xxhash.Sum64(data)
+}
+
 var _ = Describe("ConsistentHashRing", func() {
 	It("Should return the same proxy for the given key.", func() {
 		cfg := consistent.Config{
@@ -20,12 +26,12 @@ var _ = Describe("ConsistentHashRing", func() {
 			Load:              1.25,
 			Hasher:            hasher{},
 		}
-		members := make([]consistent.Member, len(addrArr))
+		members := make([]consistent.Member, len(2))
 
 		members[0] = clientMember("10.0.109.88:6378")
 		members[1] = clientMember("10.0.109.89:6378")
 
-		c.Ring = consistent.New(members, cfg)
+		ring = consistent.New(members, cfg)
 
 		key = "mr.srt-res-0"
 
@@ -36,7 +42,7 @@ var _ = Describe("ConsistentHashRing", func() {
 		//host2 := member2.String()
 
 		for i := 0; i < 10; i++ {
-			Expect(c.Ring.LocateKey([]byte(key)).String()).To(Equal("10.0.109.88:6378"))
+			Expect(ring.LocateKey([]byte(key)).String()).To(Equal("10.0.109.88:6378"))
 		}
 	})
 })
