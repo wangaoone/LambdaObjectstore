@@ -23,7 +23,7 @@ var _ = Describe("ConsistentHashRing", func() {
 		members := make([]consistent.Member, 2)
 
 		members[0] = clientMember("10.0.109.88:6378")
-		members[1] = clientMember("10.0.82.164:6378")
+		members[1] = clientMember("10.0.121.202:6378")
 
 		ring := consistent.New(members, cfg)
 
