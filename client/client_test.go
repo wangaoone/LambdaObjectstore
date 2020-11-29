@@ -23,7 +23,7 @@ var _ = Describe("ConsistentHashRing", func() {
 		members := make([]consistent.Member, 2)
 
 		members[0] = clientMember("10.0.109.88:6378")
-		members[1] = clientMember("10.0.109.89:6378")
+		members[1] = clientMember("10.0.82.164:6378")
 
 		ring := consistent.New(members, cfg)
 
@@ -36,7 +36,7 @@ var _ = Describe("ConsistentHashRing", func() {
 		//host2 := member2.String()
 
 		for i := 0; i < 10; i++ {
-			Expect(ring.LocateKey([]byte(key)).String()).To(Equal("10.0.109.89:6378"))
+			Expect(ring.LocateKey([]byte(key)).String()).To(Equal("10.0.109.88:6378"))
 		}
 	})
 })
