@@ -22,7 +22,7 @@ import (
 var (
 	log = &logger.ColorLogger{
 		Prefix: "EcRedis ",
-		Level:  logger.LOG_LEVEL_ALL,
+		Level:  logger.LOG_LEVEL_INFO,
 		Color:  false,
 	}
 	// ErrUnexpectedResponse Unexplected response
