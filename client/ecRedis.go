@@ -11,7 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cespare/xxhash"
+	//"github.com/cespare/xxhash"
+	"github.com/dchest/siphash"
 	"github.com/google/uuid"
 	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
@@ -35,7 +36,8 @@ func init() {
 type hasher struct{}
 
 func (h hasher) Sum64(data []byte) uint64 {
-	return xxhash.Sum64(data)
+	//return xxhash.Sum64(data)
+	return siphash.Hash(5, 5, data)
 }
 
 // Set New set API
