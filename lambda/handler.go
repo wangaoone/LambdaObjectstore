@@ -138,7 +138,7 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	go collector.Collect(session)
 
 	var recoverErrs []chan error
-	flags := protocol.PONG_FOR_CTRL
+	flags := protocol.PONG_FOR_CTRL | protocol.PONG_ON_INVOKING
 	if Lineage == nil {
 		// PONG represents the node is ready to serve, no fast recovery required.
 		pong.SendWithFlags(ctx, flags)
@@ -231,6 +231,9 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 	if IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
 	}
+	gcStart := time.Now()
+	runtime.GC()
+	log.Debug("GC takes %v", time.Since(gcStart))
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
 	log.Info("served %d, interrupted: %d", session.Timeout.Since(), session.Timeout.Interrupted())
 	return meta, nil
