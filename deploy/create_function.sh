@@ -1,9 +1,9 @@
 #!/bin/bash
 
 BASE=`pwd`/`dirname $0`
-PREFIX="CacheNode"
+PREFIX="CacheNode6-"
 KEY="lambda"
-cluster=512
+cluster=100
 mem=2048
 
 S3="infinistore-storage-ben"
