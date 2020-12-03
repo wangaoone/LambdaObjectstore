@@ -96,6 +96,8 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 	lambdaId, _ := c.NextArg().Int()
 	randBase, _ := c.NextArg().Int()
 
+	p.log.Debug("Serving %s:%d@%s, client: %d", c.Name, dChunkId, key, client.ID())  // New line
+
 	bodyStream, err := c.Next()
 	if err != nil {
 		p.log.Error("Error on get value reader: %v", err)
@@ -150,6 +152,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	reqId := c.Arg(1).String()
 	dChunkId, _ := c.Arg(2).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
+
+	p.log.Debug("Serving %s:%d@%s, client: %d", c.Name, dChunkId, key, client.ID())  // New line
 
 	// Start couting time.
 	collectorEntry, _ := collector.CollectRequest(collector.LogStart, nil, protocol.CMD_GET, reqId, chunkId, time.Now().UnixNano())
