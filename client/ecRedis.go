@@ -33,11 +33,18 @@ func init() {
 	rand.Seed(time.Now().UnixNano())
 }
 
-type hasher struct{}
+type hasher struct {
+	partitionCount uint64
+}
 
 func (h hasher) Sum64(data []byte) uint64 {
 	//return xxhash.Sum64(data)
 	return siphash.Hash(5, 5, data)
+}
+
+func (h *hasher) PartitionID(key []byte) int {
+	hkey := h.Sum64(key)
+	return int(hkey % h.partitionCount)
 }
 
 // Set New set API

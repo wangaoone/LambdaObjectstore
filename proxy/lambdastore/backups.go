@@ -38,23 +38,25 @@ type Backups struct {
 
 	backups    []*Instance
 	candidates []*Instance
+	required   int
 	availables int
 	locator    protocol.BackupLocator
 }
 
 func (b *Backups) Reset(num int, candidates []*Instance) {
 	if cap(b.backups) < num {
-		backups := make([]*Instance, len(b.backups), num)
+		backups := make([]*Instance, num)
 		if len(b.backups) > 0 {
-			copy(backups, b.backups)
+			copy(backups[:len(b.backups)], b.backups)
 		}
 		b.backups = backups
 	}
+	b.required = num
 	b.candidates = candidates
 }
 
 func (b *Backups) Len() int {
-	return cap(b.backups)
+	return b.required
 }
 
 func (b *Backups) Availables() int {
@@ -66,18 +68,21 @@ func (b *Backups) Iter() *BackupIterator {
 }
 
 func (b *Backups) Reserve(fallback *Instance) int {
-	if cap(b.backups) == 0 {
+	if b.required == 0 {
 		return 0
 	}
 
 	// Reset backups
-	b.backups = b.backups[:cap(b.backups)] // Reset to full size
+	if len(b.backups) < b.required {
+		b.backups = b.backups[:b.required] // Reset to full size
+	}
 	b.availables = 0
 
 	// Reserve backups so we can know how many backups are available
+	// To minimize backups' zigzag, holes are keep in place
 	changes := 0
 	alters := len(b.backups) // Alternates start from "alters"
-	failures := 0            // Continous unavailables
+	failures := 0            // Right most continous unavailables
 	for i := 0; i < len(b.backups); i++ {
 		if b.reserve(b.candidates[i]) {
 			changes += b.promoteCandidate(i, i)
@@ -85,7 +90,7 @@ func (b *Backups) Reserve(fallback *Instance) int {
 			continue
 		}
 		// Nothing left
-		if alters == len(b.candidates) {
+		if alters >= len(b.candidates) {
 			changes += b.addToBackups(i, fallback)
 			failures++
 			continue
@@ -99,23 +104,27 @@ func (b *Backups) Reserve(fallback *Instance) int {
 			}
 		}
 		// Nothing left
-		if alters == len(b.candidates) {
+		if alters >= len(b.candidates) {
 			changes += b.addToBackups(i, fallback)
 			failures++
+		} else {
+			// Advance alters
+			alters++
 		}
 	}
 
-	// Try shrink backups to eliminate unnecessary checkes
-	if failures > 0 {
-		b.backups = b.backups[:cap(b.backups)-failures]
-	}
-
 	b.locator.Reset(len(b.backups))
+
+	// Try shrink backups to eliminate unnecessary checks
+	if failures > 0 {
+		b.backups = b.backups[:len(b.backups)-failures]
+	}
 
 	return changes
 }
 
 func (b *Backups) Invalidate() {
+	b.required = 0
 	b.availables = 0
 	b.backups = b.backups[:0]
 }
@@ -125,20 +134,24 @@ func (b *Backups) Start(target *Instance) int {
 	if len(b.backups) == 0 {
 		return 0
 	}
-	for i, backup := range b.backups {
+
+	backups := b.backups
+	for i, backup := range backups {
 		if backup != nil {
-			backup.StartBacking(target, i, cap(b.backups))
+			backup.StartBacking(target, i, b.required)
 		}
 	}
 	return b.availables
 }
 
 func (b *Backups) StartByIndex(i int, target *Instance) (*Instance, bool) {
-	if i >= len(b.backups) || b.backups[i] == nil {
+	// Copy slide node for thread safety.
+	backups := b.backups
+	if i >= len(backups) || backups[i] == nil {
 		return nil, false
 	} else {
-		b.backups[i].StartBacking(target, i, cap(b.backups))
-		return b.backups[i], true
+		backups[i].StartBacking(target, i, b.required)
+		return backups[i], true
 	}
 }
 
@@ -154,13 +167,27 @@ func (b *Backups) Stop(target *Instance) {
 
 // This function is thread safe
 func (b *Backups) GetByKey(key string) (*Instance, bool) {
-	loc, ok := b.locator.Locate(key)
+	loc, required, ok := b.locator.Locate(key)
 	if !ok {
 		return nil, false
 	}
 
+	return b.getByLocation(loc, required)
+}
+
+func (b *Backups) GetByHash(hash uint64) (*Instance, bool) {
+	loc, required, ok := b.locator.LocateByHash(hash)
+	if !ok {
+		return nil, false
+	}
+
+	return b.getByLocation(loc, required)
+}
+
+func (b *Backups) getByLocation(loc int, required int) (*Instance, bool) {
 	// Copy pointer to ensure the instance will not change
-	backup := b.backups[loc]
+	backups := b.backups[:required]
+	backup := backups[loc]
 	if backup == nil {
 		return nil, false
 	}
