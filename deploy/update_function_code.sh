@@ -4,7 +4,7 @@ BASE=`pwd`/`dirname $0`
 PREFIX="CacheNode"
 KEY="lambda"
 cluster=100
-mem=2048
+mem=1024
 
 if [ -z $2 ]; then
     echo "No prefix argument supplied. Using default prefix 'CacheNode' instead."
