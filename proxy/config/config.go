@@ -8,7 +8,7 @@ import (
 const AWSRegion = "us-east-1"
 
 // LambdaMaxDeployments Number of Lambda function deployments available.
-const LambdaMaxDeployments = 400
+const LambdaMaxDeployments = 100
 
 // Mode of cluster.
 const StaticCluster = "static"
