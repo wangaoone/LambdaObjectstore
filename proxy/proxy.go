@@ -63,7 +63,7 @@ func main() {
 	log.Info("config.LambdaPrefix (after passing value from command-line) = %s", config.LambdaPrefix)
 	// CPU profiling by default
 	//defer profile.Start().Stop()
-
+	// test comment, please ignore/feel free to remove me
 	// Initialize collector
 	collector.Create(path.Join(options.LogPath, options.Prefix))
 
