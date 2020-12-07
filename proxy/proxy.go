@@ -70,7 +70,7 @@ func main() {
 	clientLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort))
 	if err != nil {
 		log.Error("Failed to listen clients: %v", err)
-		return
+		return 
 	}
 	lambdaLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
 	if err != nil {
