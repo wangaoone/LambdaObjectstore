@@ -55,9 +55,9 @@ func main() {
 		if panicErr != nil {
 			panic(panicErr)
 		}
-
+ 
 		syslog.SetOutput(logFile)
-	}
+	} 
 	log.Info("config.LambdaPrefix (initially) = %s", config.LambdaPrefix)
 	config.LambdaPrefix = options.LambdaPrefix
 	log.Info("config.LambdaPrefix (after passing value from command-line) = %s", config.LambdaPrefix)
