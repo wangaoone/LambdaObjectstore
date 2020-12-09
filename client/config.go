@@ -13,6 +13,6 @@ var (
 	// Timeout The timeout of a single operation
 	Timeout = 10 * time.Second
 
-	// Timeout The timeout for sending header fields, and reading response headers.
-	HeaderTimeout = 1 * time.Second
+	// HeaderTimeout The timeout for sending header fields, and reading response headers.
+	HeaderTimeout = 10 * time.Second
 )

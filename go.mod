@@ -10,6 +10,7 @@ require (
 	github.com/buraksezer/consistent v0.0.0-20191006190839-693edf70fd72
 	github.com/cespare/xxhash v1.1.0
 	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
+	github.com/dchest/siphash v1.1.0
 	github.com/dgryski/go-metro v0.0.0-20180109044635-280f6062b5bc // indirect
 	github.com/gizak/termui/v3 v3.1.0
 	github.com/google/uuid v1.1.1
