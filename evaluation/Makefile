@@ -7,7 +7,7 @@ prepare:
 
 build: prepare
 	go build -o bin/proxy ../proxy/
-	#go build -o bin/preprocess benchmark-recovery/preprocess.go
+	# go build -o bin/lambda ../lambda/
 
 build-data: prepare
 	go build -o bin/preprocess benchmark-recovery/preprocess.go
@@ -22,19 +22,25 @@ build-simulator: prepare
 	go build -o bin/playback github.com/wangaoone/redbench/simulator/playback/
 
 dryrun: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_50h.csv 400 10 2 1 -compact dryrun
+	./playback.sh dryrun /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-d=10 -p=2 -w=100 -balance"
 
 simulate: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -compact 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact 1>./log 2>&1 &
 
 simulate-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -compact -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 1000 "" "-d=10 -p=2" -compact -enable-dashboard 1>./log 2>&1 &
 
 playback: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" 1>./log 2>&1 &
 
 playback-with-dashboard: build build-simulator
-	./playback.sh /trace/docker_traces/data_centers/csv/dal09_10mb_8h.csv 400 10 2 1 -enable-dashboard 1>./log 2>&1 &
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 1000 "" "-d=10 -p=2" -enable-dashboard 1>./log 2>&1 &
+
+playback-static: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400" "-d=10 -p=2" 1>./log 2>&1 &
+
+playback-static-norecovery: build build-simulator
+	./playback.sh /trace/docker_traces/data_centers/csv/dal09_blobs_50h.csv 400 "-cluster=static -functions=400 -disable-recovery" "-d=10 -p=2" 1>./log 2>&1 &
 
 start-server: build
 	./server.sh 1>./log 2>&1 &
@@ -42,17 +48,17 @@ start-server: build
 stop-server:
 	kill -2 $(shell cat /tmp/infinicache.pid)
 
-benchmark:
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
+benchmark: build-bench
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
 
 benchmark-recovery: build build-bench
 	benchmark-recovery/benchmark.sh 1>./log 2>&1 &
 
-test:
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
+test: build-bench
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 0
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1048576 -d 10 -p 2 -op 1 -i 2000
 
-test-redis:
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
-	go run ${GOPATH}/src/github.com/wangaoone/redbench/bench.go -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1
+test-redis: build-bench
+	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
+	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1

@@ -2,7 +2,9 @@ package types
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"github.com/mason-leap-lab/redeo/resp"
 
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 )
 
 const (
@@ -37,10 +40,15 @@ type Request struct {
 	conn             Conn
 	status           uint32
 	streamingStarted bool
+	responded        promise.Promise
 }
 
 func (req *Request) String() string {
-	return req.Cmd
+	return fmt.Sprintf("%s %v", req.Cmd, req.Id)
+}
+
+func (req *Request) Name() string {
+	return strings.ToLower(req.Cmd)
 }
 
 func (req *Request) GetRequest() *Request {
@@ -76,11 +84,12 @@ func (req *Request) PrepareForSet(conn Conn) {
 }
 
 func (req *Request) PrepareForGet(conn Conn) {
-	conn.Writer().WriteMultiBulkSize(4)
+	conn.Writer().WriteMultiBulkSize(5)
 	conn.Writer().WriteBulkString(req.Cmd)
 	conn.Writer().WriteBulkString(req.Id.ReqId)
 	conn.Writer().WriteBulkString(req.Id.ChunkId)
 	conn.Writer().WriteBulkString(req.Key)
+	conn.Writer().WriteBulkString(strconv.FormatInt(req.BodySize, 10))
 	req.conn = conn
 }
 
@@ -111,22 +120,15 @@ func (req *Request) PrepareForRecover(conn Conn) {
 	req.conn = conn
 }
 
-func (req *Request) Flush(timeout time.Duration) error {
+func (req *Request) Flush() error {
 	if req.conn == nil {
 		return errors.New("connection for request not set")
 	}
 	conn := req.conn
 	req.conn = nil
 
-	conn.SetWriteDeadline(time.Now().Add(timeout)) // Set deadline for write
-	defer conn.SetWriteDeadline(time.Time{})
-	if err := conn.Writer().Flush(); err != nil {
-		return err
-	}
-
 	if req.BodyStream != nil {
 		req.streamingStarted = true
-		conn.SetWriteDeadline(time.Time{})
 		if err := conn.Writer().CopyBulk(req.BodyStream, req.BodyStream.Len()); err != nil {
 			// On error, we need to unhold the stream, and allow Close to perform.
 			if holdable, ok := req.BodyStream.(resp.Holdable); ok {
@@ -134,12 +136,9 @@ func (req *Request) Flush(timeout time.Duration) error {
 			}
 			return err
 		}
-
-		conn.SetWriteDeadline(time.Now().Add(timeout))
-		return conn.Writer().Flush()
 	}
 
-	return nil
+	return conn.Writer().Flush()
 }
 
 func (req *Request) IsReturnd() bool {
@@ -165,15 +164,18 @@ func (req *Request) SetResponse(rsp interface{}) bool {
 	if !atomic.CompareAndSwapUint32(&req.status, REQUEST_RETURNED, REQUEST_RESPONDED) {
 		return false
 	}
+	if req.responded != nil {
+		req.responded.Resolve(rsp)
+	}
 	if req.Client != nil {
-		ret := req.Client.AddResponses(&ProxyResponse{rsp, req})
+		ret := req.Client.AddResponses(&ProxyResponse{Response: rsp, Request: req})
 
 		// Release reference so chan can be garbage collected.
 		req.Client = nil
 		return ret == nil
 	}
 
-	return false
+	return true
 }
 
 // Only appliable to GET so far.
@@ -182,4 +184,19 @@ func (req *Request) Abandon() bool {
 		return false
 	}
 	return req.SetResponse(&Response{Id: req.Id, Cmd: req.Cmd})
+}
+
+func (req *Request) SetTimeout(timeout time.Duration) {
+	req.initPromise().SetTimeout(timeout)
+}
+
+func (req *Request) Timeout() error {
+	return req.initPromise().Timeout()
+}
+
+func (req *Request) initPromise() promise.Promise {
+	if req.responded == nil {
+		req.responded = promise.NewPromise()
+	}
+	return req.responded
 }

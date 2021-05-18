@@ -2,6 +2,9 @@
 LAMBDA="/aws/lambda/"
 FILE="log/"
 LOG_PREFIX="Store1VPCNode"
+COLOROK="\e[32m"
+COLORFAIL="\e[31m"
+ENDCOLOR="\e[0m"
 
 PREFIX=$1
 start=$2
@@ -21,92 +24,71 @@ if [ "$5" != "" ] ; then
   TO=$5
 fi
 
-# Wait for the end the last task
-for j in {0..15}
-do
-  RUNNING=`aws logs describe-export-tasks --status-code "RUNNING" | grep taskId | awk -F \" '{ print $4 }'`
-  if [ "$RUNNING" != "" ]; then
-    sleep 2s
-  else
-    break
+function wait_task(){
+  RUNNING=$1
+  # Query running task
+  if [ "$RUNNING" == "" ] ; then
+    RUNNING=`aws logs describe-export-tasks --status-code "RUNNING" | grep taskId | awk -F \" '{ print $4 }'`
+    if [ "$RUNNING" == "" ] ; then
+      return 0
+    fi
+    printf "Waiting to finish, task-id $RUNNING "
   fi
-done
-
-# Abandon
-if [ "$RUNNING" != "" ]; then
-  echo "Detect running task and wait timeout, killing task \"$RUNNING\"..."
-  aws logs cancel-export-task --task-id \"$RUNNING\"
-
-fi
-
-# Wait another 30 seconds for the abandon procedure
-for j in {0..15}
-do
-  RUNNING=`aws logs describe-export-tasks --status-code "RUNNING" | grep taskId | awk -F \" '{ print $4 }'`
-  if [ "$RUNNING" != "" ]; then
+  
+  # Wait for the end the last task
+  while :
+  do
     sleep 2s
-  else
-    break
-    echo "Done"
-  fi
-done
+    STATUSCODE=`aws logs describe-export-tasks --task-id "$RUNNING" | grep code | awk -F \" '{ print $4 }'`
+    if [ "$STATUSCODE" != "COMPLETED" -a "$STATUSCODE" != "CANCELLED" -a "$STATUSCODE" != "FAILED" ] ; then
+      printf "."
+      continue
+    elif [ "$STATUSCODE" == "COMPLETED" ] ; then
+      echo -e " ${COLOROK}${STATUSCODE}${ENDCOLOR}"
+      return 0
+    else
+      echo -e " ${COLORFAIL}${STATUSCODE}${ENDCOLOR}"
+      return 1
+    fi
+  done
+}
+
+# wait for tasks running now
+wait_task
+echo "" #Blank to separate tasks
 
 for (( i=$FROM; i<=$TO; i++ ))
 do
   # try 3 times
+  BACKOFF=2
   for k in {0..2}
   do
     echo "exporting $LAMBDA$LOG_PREFIX$i"
-    aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i
-    if [ $? != 0 ] ; then
+    RUNNING=`aws logs create-export-task --log-group-name $LAMBDA$LOG_PREFIX$i --from ${startTime} --to ${endTime} --destination "tianium.default" --destination-prefix $FILE$PREFIX$LOG_PREFIX$i | grep taskId | awk -F \" '{ print $4 }'`
+    if [ "$RUNNING" == "" ] ; then
       if [ k == 2 ] ; then
         echo "abort"
       else
-        echo "retry"
+        echo "retry after ${BACKOFF}s"
       fi
-      sleep 2s
+      sleep ${BACKOFF}s
+      ((BACKOFF=BACKOFF*2))
       continue
-    fi
-    sleep 2s
-
-    # Wait for the end the last task
-    for j in {0..15}
-    do
-      RUNNING=`aws logs describe-export-tasks --status-code "RUNNING" | grep taskId | awk -F \" '{ print $4 }'`
-      if [ "$RUNNING" != "" ]; then
-        sleep 2s
-      else
-        break
-      fi
-    done
-
-    # Abandon
-    if [ "$RUNNING" != "" ]; then
-      echo "Detect running task and wait timeout, killing task \"$RUNNING\"..."
-      aws logs cancel-export-task --task-id \"$RUNNING\"
-      if [ $? != 0 ] ; then
-        echo "Done"
-        sleep 2s
-        break
-      fi
     else
-      echo "Done"
-      sleep 2s
-      break
+      printf "task-id $RUNNING "
     fi
 
-    # Wait another 30 seconds for the abandon procedure
-    for j in {0..15}
-    do
-      RUNNING=`aws logs describe-export-tasks --status-code "RUNNING" | grep taskId | awk -F \" '{ print $4 }'`
-      if [ "$RUNNING" != "" ]; then
-        sleep 2s
-      else
-        break
-      fi
-    done
-
-    echo "retry"
-    sleep 2s
+    # Wait or cancel task on timeout
+    wait_task ${RUNNING}
+    if [ $? == 0 ] ; then
+      # pass
+      break
+    elif [ k == 2 ] ; then
+      echo -e "${COLORFAIL}Abort${ENDCOLOR}"
+    else
+      echo -e "${COLOROK}Retry${ENDCOLOR}"
+    fi
   done
+
+  echo "" #Blank to separate tasks
 done

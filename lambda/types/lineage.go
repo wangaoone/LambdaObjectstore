@@ -42,12 +42,14 @@ func LineageMetaFromProtocol(meta *protocol.Meta) (lm *LineageMeta, err error) {
 	return
 }
 
+func (meta *LineageMeta) ServingKey() string {
+	return meta.Tips.Get(protocol.TIP_SERVING_KEY)
+}
+
 type Lineage interface {
 	IsConsistent(*LineageMeta) (bool, error)
-	ResetBackup()
-	TrackLineage()
+	ClearBackup()
 	Commit() (*CommitOption, error)
-	StopTracker(*CommitOption) LineageStatus
 	Recover(*LineageMeta) (bool, chan error)
 	Status() LineageStatus
 }

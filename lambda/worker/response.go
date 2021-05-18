@@ -6,15 +6,15 @@ import (
 	"sync"
 	"time"
 
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
+	"github.com/mason-leap-lab/infinicache/common/util/promise"
 	"github.com/mason-leap-lab/infinicache/lambda/lifetime"
 	"github.com/mason-leap-lab/redeo"
 	"github.com/mason-leap-lab/redeo/resp"
 )
 
 var (
-	RequestTimeout = 1 * time.Second
-
-	ctxKeyClient = struct{}{}
+	ResponseTimeout = 100 * time.Millisecond
 )
 
 type Preparer func(*SimpleResponse, resp.ResponseWriter)
@@ -58,7 +58,7 @@ type BaseResponse struct {
 	link      *Link
 	attempted int
 	err       error
-	done      sync.WaitGroup
+	done      promise.Promise
 	doneOnce  sync.Once
 	inst      Response
 	preparer  Preparer
@@ -79,8 +79,9 @@ func (r *BaseResponse) Prepare() {
 }
 
 func (r *BaseResponse) Flush() error {
-	r.done.Wait()
-	return r.err
+	// Timeout added here, sometimes redeo may not handle all responses.
+	r.done.SetTimeout(r.getTimeout())
+	return r.done.Timeout()
 }
 
 func (r *BaseResponse) Size() int64 {
@@ -113,7 +114,7 @@ func (r *BaseResponse) bindImpl(inst Response, link *Link) {
 		if r.Attempts == 0 {
 			r.Attempts = MaxAttempts
 		}
-		r.done.Add(1)
+		r.done = promise.NewPromise()
 		r.inst = inst
 		r.link = link
 	}
@@ -135,7 +136,7 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 	client := redeo.GetClient(r.Context())
 	conn := client.Conn()
 
-	conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
+	conn.SetWriteDeadline(time.Now().Add(ResponseTimeout)) // Set deadline for write
 	defer conn.SetWriteDeadline(time.Time{})
 	if err := r.ResponseWriter.Flush(); err != nil {
 		r.err = err
@@ -164,11 +165,21 @@ func (r *BaseResponse) flush(writer resp.ResponseWriter) error {
 	}
 
 	if hasBulk {
-		conn.SetWriteDeadline(time.Now().Add(RequestTimeout)) // Set deadline for write
+		conn.SetWriteDeadline(time.Now().Add(ResponseTimeout)) // Set deadline for write
 		r.err = r.ResponseWriter.Flush()
 	}
 
 	return r.err
+}
+
+func (r *BaseResponse) getTimeout() time.Duration {
+	if r.Body != nil {
+		return lifetime.GetStreamingTimeout(int64(len(r.Body)))
+	} else if r.BodyStream != nil {
+		return lifetime.GetStreamingTimeout(r.BodyStream.Len())
+	} else {
+		return ResponseTimeout
+	}
 }
 
 func (r *BaseResponse) markAttempt() int {
@@ -183,8 +194,12 @@ func (r *BaseResponse) abandon(err error) {
 
 func (r *BaseResponse) close() {
 	if r.link != nil {
-		r.doneOnce.Do(r.done.Done)
+		r.doneOnce.Do(r.resolve)
 	}
+}
+
+func (r *BaseResponse) resolve() {
+	r.done.Resolve(&struct{}{})
 }
 
 type SimpleResponse struct {
@@ -199,23 +214,22 @@ func (r *SimpleResponse) bind(link *Link) {
 type ObjectResponse struct {
 	BaseResponse
 
-	Cmd        string
-	ReqId      string
-	ChunkId    string
-	Val        string
-	Body       []byte
-	BodyStream resp.AllReadCloser
+	ReqId     string
+	ChunkId   string
+	Val       string
+	Recovered int64
 }
 
 func (r *ObjectResponse) Prepare() {
 	r.AppendBulkString(r.Cmd)
 	r.AppendBulkString(r.ReqId)
 	r.AppendBulkString(r.ChunkId)
+	if r.Cmd == protocol.CMD_GET {
+		r.AppendInt(r.Recovered)
+	}
 	if len(r.Val) > 0 {
 		r.AppendBulkString(r.Val)
 	}
-	r.BaseResponse.Body = r.Body
-	r.BaseResponse.BodyStream = r.BodyStream
 }
 
 func (r *ObjectResponse) bind(link *Link) {
@@ -230,6 +244,19 @@ func (r *ObjectResponse) Size() int64 {
 	} else {
 		return int64(len(r.Val))
 	}
+}
+
+func (r *ObjectResponse) flush(writer resp.ResponseWriter) error {
+	link := LinkFromClient(redeo.GetClient(r.Context()))
+	link.acked.Reset()
+
+	err := r.BaseResponse.flush(writer)
+	if err != nil {
+		return err
+	}
+
+	link.acked.SetTimeout(ResponseTimeout)
+	return nil
 }
 
 // ErrorResponse Response wrapper for errors.

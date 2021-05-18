@@ -1,17 +1,20 @@
 package types
 
+import "net"
+
 // InputEvent Input for the Lambda
 type InputEvent struct {
-	Sid     string `json:"sid"`    // Session id to ensure invoking once only.
-	Cmd     string `json:"cmd"`    // Invocation type, can be "ping", "warmup".
-	Id      uint64 `json:"id"`     // Node id
-	Proxy   string `json:"proxy"`  // Address of proxy .
-	Addr    string `json:"addr"`   // Address of P2P relay.
-	Prefix  string `json:"prefix"` // Experiment id reserved for evaluation.
-	Log     int    `json:"log"`    // Log level - debug or not.
-	Flags   uint64 `json:"flags"`  // Feature flags
-	Backups int    `json:"baks"`   // Number of configured recovery nodes
-	Status  Status `json:"status"` // Lineage info
+	Sid       string   `json:"sid"`   // Session id to ensure invoking once only.
+	Cmd       string   `json:"cmd"`   // Invocation type, can be "ping", "warmup".
+	Id        uint64   `json:"id"`    // Node id
+	Proxy     string   `json:"proxy"` // Address of proxy .
+	ProxyAddr net.Addr // Address of proxy, for simulation.
+	Addr      string   `json:"addr"`   // Address of P2P relay.
+	Prefix    string   `json:"prefix"` // Experiment id reserved for evaluation.
+	Log       int      `json:"log"`    // Log level - debug or not.
+	Flags     uint64   `json:"flags"`  // Feature flags
+	Backups   int      `json:"baks"`   // Number of configured recovery nodes
+	Status    Status   `json:"status"` // Lineage info
 }
 
 func (i *InputEvent) IsReplicaEnabled() bool {
@@ -20,6 +23,10 @@ func (i *InputEvent) IsReplicaEnabled() bool {
 
 func (i *InputEvent) IsPersistencyEnabled() bool {
 	return (i.Flags & FLAG_ENABLE_PERSISTENT) > 0
+}
+
+func (i *InputEvent) IsRecoveryEnabled() bool {
+	return (i.Flags & (FLAG_ENABLE_PERSISTENT | FLAG_DISABLE_RECOVERY)) == FLAG_ENABLE_PERSISTENT
 }
 
 func (i *InputEvent) IsBackingOnly() bool {
@@ -77,7 +84,9 @@ const (
 	FLAG_WARMUP_REPLICA = 0x0020
 	// FLAG_ENABLE_PERSISTENT Enable persist.
 	FLAG_ENABLE_PERSISTENT = 0x0100
-	// FLAG_EXPIRED Disable recovery for main repository
+	// FLAG_DISABLE_RECOVERY Disable recovery on reclaimation.
+	FLAG_DISABLE_RECOVERY = 0x0200
+	// FLAG_BACKING_ONLY Disable recovery for main repository
 	FLAG_BACKING_ONLY = 0x1000
 
 	// PONG_FOR_DATA Pong for data link
@@ -92,6 +101,7 @@ const (
 	PONG_RECLAIMED = int64(0x0040)
 
 	CMD_TEST        = "test"
+	CMD_ACK         = "ack"         // Control command
 	CMD_GET         = "get"         // Redis and Lambda command
 	CMD_GET_CHUNK   = "get chunk"   // Client command
 	CMD_SET         = "set"         // Redis and Lambda command

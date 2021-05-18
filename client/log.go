@@ -9,8 +9,6 @@ import (
 )
 
 var (
-	logRec    nanolog.Handle
-	logDec    nanolog.Handle
 	logClient nanolog.Handle
 	nlogger   func(nanolog.Handle, ...interface{}) error
 )
@@ -27,17 +25,8 @@ type logEntry struct {
 }
 
 func init() {
-	//LogClient = nanolog.AddLogger("%s All goroutine has finished. Duration is %s")
-	logRec = nanolog.AddLogger("chunk id is %i, " +
-		"Client send RECEIVE req timeStamp is %s " +
-		"Client Peek ChunkId time is %s" +
-		"Client read ChunkId time is %s " +
-		"Client Peek chunkBody time is %s " +
-		"Client read chunkBody time is %s " +
-		"RECEIVE goroutine duration time is %s ")
-	logDec = nanolog.AddLogger("DataStatus is %b, Decoding time is %s")
 	// cmd, reqId, begin, duration, get/set req latency, rec latency, decoding latency, all good, corrupted, size
-	logClient = nanolog.AddLogger("%s,%s,%i64,%i64,%i64,%i64,%i64,%b,%b,%i")
+	logClient = nanolog.AddLogger("%s,%s,%i64,%i64,%i64,%i64,%i64,%b,%b,%i64")
 }
 
 // CreateLog Enabling evaluation log in client lib.

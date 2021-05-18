@@ -8,6 +8,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambdacontext"
 	"github.com/mason-leap-lab/infinicache/common/logger"
+	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 const TICK = 100 * time.Millisecond
@@ -24,7 +25,7 @@ const TICK_5_ERROR = 10 * time.Millisecond
 const TICK_10_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_10_ERROR = 2 * time.Millisecond
 
-const BANDWIDTH = 0.04 // 0.04B/ns = 40MB/s for single connection
+const BANDWIDTH_FACTOR = 25 // 1/bandwidth, while bandwidth = 40MB/s = 0.04B/ns for single connection
 const STREAMING_TIMEOUT_FACTOR = 10
 
 var (
@@ -36,7 +37,9 @@ var (
 
 func init() {
 	// adapt
-	if lambdacontext.MemoryLimitInMB < 896 {
+	if lambdacontext.MemoryLimitInMB == 0 {
+		// Do nothing, default
+	} else if lambdacontext.MemoryLimitInMB < 896 {
 		TICK_ERROR_EXTEND = TICK_1_ERROR_EXTEND
 		TICK_ERROR = TICK_1_ERROR
 	} else if lambdacontext.MemoryLimitInMB < 1792 {
@@ -74,12 +77,16 @@ func TimeoutAfterWithReturn(f func() (interface{}, error), timeout time.Duration
 	return
 }
 
-func GetStreamingDeadline(size int64) time.Time {
-	timeout := time.Duration(float64(size) / BANDWIDTH * STREAMING_TIMEOUT_FACTOR)
+func GetStreamingTimeout(size int64) time.Duration {
+	timeout := time.Duration(size * BANDWIDTH_FACTOR * STREAMING_TIMEOUT_FACTOR)
 	if timeout < time.Second {
 		timeout = time.Second
 	}
-	return time.Now().Add(timeout)
+	return timeout
+}
+
+func GetStreamingDeadline(size int64) time.Time {
+	return time.Now().Add(GetStreamingTimeout(size))
 }
 
 type Timeout struct {
@@ -209,6 +216,7 @@ func (t *Timeout) SetLogger(log logger.ILogger) {
 func (t *Timeout) Busy(reason string) {
 	// log.Println("busy")
 	actives := atomic.AddInt32(&t.active, 1)
+	t.lastReason = reason // Acknowledge the ping extension.
 	t.log.Debug("Busy %s(%d)", reason, actives)
 }
 
@@ -221,7 +229,10 @@ func (t *Timeout) DoneBusy(reason string) {
 func (t *Timeout) DoneBusyWithReset(ext time.Duration, reason string) {
 	// log.Printf("done busy with reset %v\n", ext)
 	t.DoneBusy(reason)
-	t.ResetWithExtension(ext, reason)
+	// Unacknowledged ping will be preserved.
+	if t.lastReason != protocol.CMD_PING {
+		t.ResetWithExtension(ext, reason)
+	}
 }
 
 func (t *Timeout) IsBusy() bool {

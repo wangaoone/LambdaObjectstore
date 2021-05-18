@@ -2,6 +2,7 @@ package views
 
 import (
 	"image"
+	"math"
 
 	ui "github.com/gizak/termui/v3"
 	"github.com/gizak/termui/v3/drawille"
@@ -18,8 +19,10 @@ var (
 
 type ClusterView struct {
 	*ui.Canvas
-	Cluster    types.ClusterStats
-	Cols       int
+	Cluster types.ClusterStats
+	Cols    int
+	Compact bool
+
 	origin     image.Point
 	mapper     image.Point
 	mapbase    int
@@ -28,9 +31,10 @@ type ClusterView struct {
 
 func NewClusterView(title string) *ClusterView {
 	view := &ClusterView{
-		Canvas: ui.NewCanvas(),
-		origin: image.Pt(0, 0),
-		mapper: image.Pt(2, 4),
+		Canvas:  ui.NewCanvas(),
+		Compact: false,
+		origin:  image.Pt(0, 0),
+		mapper:  image.Pt(2, 4),
 	}
 	view.Title = title
 	return view
@@ -38,9 +42,10 @@ func NewClusterView(title string) *ClusterView {
 
 func NewClusterComponent() *ClusterView {
 	view := &ClusterView{
-		Canvas: ui.NewCanvas(),
-		origin: image.Pt(0, 0),
-		mapper: image.Pt(2, 4),
+		Compact: true,
+		Canvas:  ui.NewCanvas(),
+		origin:  image.Pt(0, 0),
+		mapper:  image.Pt(2, 4),
 	}
 	view.Border = false
 	return view
@@ -104,17 +109,18 @@ func (v *ClusterView) updateMapper(len int) {
 	if v.mapper.X < 2 {
 		v.mapper.X = 2 // minimum recognizable interval
 	}
-	v.origin.X = v.Inner.Min.X * 2 // + v.mapper.X
+	v.origin.X = v.Inner.Min.X + v.Inner.Max.X + 1 - v.mapper.X*v.Cols/2 // + v.mapper.X
 
-	// rows := int(math.Ceil(float64(len) / float64(v.Cols)))
-	// v.mapper.Y = (v.Inner.Max.Y - v.Inner.Min.Y + 1) * 4 / (rows + 1)
-	// if v.mapper.Y > v.mapper.X {
-	// 	v.mapper.Y = v.mapper.X
-	// }
-	// if v.mapper.Y < 4 {
-	// 	v.mapper.Y = 4 // minimum recognizable interval
-	// }
-	v.origin.Y = v.Inner.Max.Y*4 - 2 // reverse
+	v.origin.Y = 0
+	if !v.Compact {
+		rows := int(math.Ceil(float64(len) / float64(v.Cols)))
+		v.mapper.Y = (v.Inner.Max.Y - v.Inner.Min.Y + 1) * 4 / rows
+		if v.mapper.Y < 4 {
+			v.mapper.Y = 4 // minimum recognizable interval
+		}
+		v.origin.Y = -v.mapper.Y / 2
+	}
+	v.origin.Y += v.Inner.Max.Y*4 - 2 // reverse
 	// log.Printf("Demension %v to %v: %v\n", v.Inner.Max, v.Inner.Min, v.mapper)
 
 	v.mapbase = len
@@ -134,30 +140,39 @@ func (v *ClusterView) getCellByInstance(ins types.InstanceStats) *drawille.Cell 
 
 	if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_SHADOW {
 		return &drawille.Cell{Rune: '▢', Color: drawille.Color(ui.ColorWhite)}
+	} else {
+		return &drawille.Cell{Color: drawille.Color(v.getColorByStatus(status))}
+	}
+}
+
+func (v *ClusterView) getColorByStatus(status uint64) ui.Color {
+	if status&lambdastore.INSTANCE_MASK_STATUS_FAILURE > 0 {
+		return ui.ColorRed
 	} else if status&lambdastore.INSTANCE_MASK_STATUS_START == lambdastore.INSTANCE_UNSTARTED {
 		// Unstarted
-		return &drawille.Cell{Color: drawille.Color(ui.ColorWhite)}
+		return ui.ColorWhite
 	} else if backing := (status & lambdastore.INSTANCE_MASK_STATUS_BACKING >> 8); backing&lambdastore.INSTANCE_RECOVERING > 0 {
 		// Recovering
-		return &drawille.Cell{Color: drawille.Color(ui.ColorCyan)}
+		return ui.ColorCyan
 	} else if backing&lambdastore.INSTANCE_BACKING > 0 {
 		// Backing
-		return &drawille.Cell{Color: drawille.Color(ui.ColorBlue)}
+		return ui.ColorBlue
 	} else if phase := (status & lambdastore.INSTANCE_MASK_STATUS_LIFECYCLE >> 12); phase == lambdastore.PHASE_ACTIVE {
 		// Active
-		return &drawille.Cell{Color: drawille.Color(ui.ColorGreen)}
+		return ui.ColorGreen
 	} else if phase == lambdastore.PHASE_BACKING_ONLY {
 		// Backing only
-		return &drawille.Cell{Color: drawille.Color(ui.ColorYellow)}
+		return ui.ColorYellow
 	} else if phase >= lambdastore.PHASE_RECLAIMED {
 		// Expired or reclaimed
-		return &drawille.Cell{Color: drawille.Color(ui.ColorRed)}
+		return ui.ColorRed
 	} else {
-		return &drawille.Cell{Color: drawille.Color(ui.ColorMagenta)}
+		return ui.ColorMagenta
 	}
 }
 
 func (v *ClusterView) Draw(buf *ui.Buffer) {
+	v.invalidate = true
 	v.update()
 	v.Block.Draw(buf)
 	var defaultRune rune
@@ -169,12 +184,12 @@ func (v *ClusterView) Draw(buf *ui.Buffer) {
 			convertedCell := ui.Cell{
 				// cell.Rune, see https://github.com/gizak/termui/blob/master/v3/symbols.go for options.
 				// more Runes: https://en.wikipedia.org/wiki/List_of_Unicode_characters
-				cell.Rune, // or ui.DOT
+				Rune: cell.Rune, // or ui.DOT
 				// ui.IRREGULAR_BLOCKS[12],
-				ui.Style{
-					ui.Color(cell.Color),
-					ui.ColorClear,
-					ui.ModifierClear,
+				Style: ui.Style{
+					Fg:       ui.Color(cell.Color),
+					Bg:       ui.ColorClear,
+					Modifier: ui.ModifierClear,
 				},
 			}
 			buf.SetCell(convertedCell, point)

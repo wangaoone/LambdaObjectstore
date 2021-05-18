@@ -18,18 +18,22 @@ const (
 )
 
 var (
-	Enable           bool
-	LogServer2Client nanolog.Handle
-	//LogServer        nanolog.Handle
-	//LogServerBufio   nanolog.Handle
-	LogProxy           nanolog.Handle = 10001
-	LogChunk           nanolog.Handle = 10002
-	LogStart           nanolog.Handle = 10003
-	LogLambda          nanolog.Handle = 10004
-	LogValidate        nanolog.Handle = 10005
-	LogEndtoEnd        nanolog.Handle = 20000
-	LogCluster         nanolog.Handle
-	LogBucketRotate    nanolog.Handle
+	Enable bool
+
+	LogChunk        nanolog.Handle
+	LogEndtoEnd     nanolog.Handle
+	LogCluster      nanolog.Handle
+	LogBucketRotate nanolog.Handle
+
+	// LogStart Component of LogChunk, fields: cmd, reqId, chunk, startedAt
+	LogStart nanolog.Handle = 10001
+	// LogValidate Component of LogChunk, fields: validatedAt
+	LogValidate nanolog.Handle = 10002
+	// LogProxy Component of LogChunk, fields: firstByteReceivedAt, headerReceivedAt, bodyReceivedAt, recoveryFlag
+	LogProxy nanolog.Handle = 10003
+	// LogServer2Client Component of LogChunk, fields: headerSentAt, bodySentAt, allSentAt, endedAt
+	LogServer2Client nanolog.Handle = 10004
+
 	ErrUnexpectedEntry = errors.New("unexpected log entry")
 
 	ticker       *time.Ticker
@@ -43,8 +47,8 @@ var (
 )
 
 func init() {
-	// cmd, reqId, chunk, start, duration, firstByte, header from lambda, header to client, obsolete1, obsolete2, streaming, ping
-	LogChunk = nanolog.AddLogger("%s,%s,%s,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64")
+	// cmd, reqId, chunk, start, duration, firstByte, header from lambda, header to client, obsolete1, obsolete2, streaming, ping, status
+	LogChunk = nanolog.AddLogger("%s,%s,%s,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64,%i64")
 	// cmd, status, bytes, start, duration
 	LogEndtoEnd = nanolog.AddLogger("%s,%s,%i64,%i64,%i64")
 	// type(cluster), time, total, actives, degraded, expired
@@ -108,6 +112,7 @@ type DataEntry struct {
 	appendBulk    int64
 	flush         int64
 	validate      int64
+	status        int64
 	mu            sync.Mutex
 }
 
@@ -132,7 +137,7 @@ func Collect(handle nanolog.Handle, args ...interface{}) error {
 	return nanolog.Log(handle, args...)
 }
 
-func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}) (*DataEntry, error) {
+func CollectRequest(handle nanolog.Handle, e interface{}, args ...interface{}) (interface{}, error) {
 	lastActivity = time.Now()
 	if !Enable {
 		return nil, nil
@@ -145,31 +150,43 @@ func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}
 		entry.chunkId = args[2].(string)
 		entry.start = args[3].(int64)
 		return entry, nil
-	} else if handle == LogValidate {
-		entry.validate = args[3].(int64)
+	}
+
+	entry, ok := e.(*DataEntry)
+	if !ok {
+		return nil, ErrUnexpectedEntry
+	}
+	switch handle {
+	case LogValidate:
+		entry.validate = args[0].(int64)
 		return entry, nil
-	} else if handle == LogProxy {
+	case LogProxy:
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
-		entry.firstByte = args[3].(int64) - entry.start
-		entry.lambda2Server = args[4].(int64)
-		entry.readBulk = args[5].(int64)
-		// For late request, duration must be set.
+		entry.firstByte = args[0].(int64) - entry.start
+		entry.lambda2Server = args[1].(int64)
+		entry.readBulk = args[2].(int64)
+		if len(args) > 3 {
+			entry.status = args[3].(int64)
+		}
 		if entry.duration == 0 {
 			return entry, nil
 		}
-	} else if handle == LogServer2Client {
+		// Duration has been set, because the request is late and finished. Continue and complete LogChunk
+	case LogServer2Client:
 		entry.mu.Lock()
 		defer entry.mu.Unlock()
-		entry.server2Client = args[3].(int64)
-		entry.appendBulk = args[4].(int64)
-		entry.flush = args[5].(int64)
-		entry.duration = args[6].(int64) - entry.start
-		// For normal request, firstByte must be set.
+		entry.server2Client = args[0].(int64)
+		entry.appendBulk = args[1].(int64)
+		entry.flush = args[2].(int64)
+		entry.duration = args[3].(int64) - entry.start
+		// For normal request, firstByte must be nonzero.
 		if entry.firstByte == 0 {
+			// Late request can be never sent to the lambda, so the firstByte is zero. These ignored request will not be logged.
 			return entry, nil
 		}
-	} else {
+		// All done. Continue and complete LogChunk
+	default:
 		return nil, ErrUnexpectedEntry
 	}
 
@@ -177,5 +194,5 @@ func CollectRequest(handle nanolog.Handle, entry *DataEntry, args ...interface{}
 	return nil, nanolog.Log(LogChunk, fmt.Sprintf("%schunk", entry.cmd), entry.reqId, entry.chunkId,
 		entry.start, entry.duration,
 		entry.firstByte, entry.lambda2Server, entry.server2Client,
-		entry.readBulk, entry.appendBulk, entry.flush, entry.validate)
+		entry.readBulk, entry.appendBulk, entry.flush, entry.validate, entry.status)
 }

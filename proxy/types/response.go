@@ -1,7 +1,9 @@
 package types
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"github.com/mason-leap-lab/redeo/resp"
@@ -10,6 +12,21 @@ import (
 type ProxyResponse struct {
 	Response interface{}
 	Request  *Request
+
+	ctx context.Context
+}
+
+// Context return the response context
+func (r *ProxyResponse) Context() context.Context {
+	if r.ctx != nil {
+		return r.ctx
+	}
+	return context.Background()
+}
+
+// SetContext sets the client's context
+func (r *ProxyResponse) SetContext(ctx context.Context) {
+	r.ctx = ctx
 }
 
 type Response struct {
@@ -18,8 +35,13 @@ type Response struct {
 	Size       int64
 	Body       []byte
 	BodyStream resp.AllReadCloser
+	Status     int64
 
 	w resp.ResponseWriter
+}
+
+func (rsp *Response) String() string {
+	return fmt.Sprintf("%s %v", rsp.Cmd, rsp.Id)
 }
 
 func (rsp *Response) PrepareForSet(w resp.ResponseWriter) {
@@ -37,7 +59,8 @@ func (rsp *Response) PrepareForGet(w resp.ResponseWriter) {
 	} else {
 		w.AppendBulkString(rsp.Id.ChunkId)
 	}
-	if rsp.Body != nil {
+	// Only one body field is returned, stream is prefered.
+	if rsp.BodyStream == nil && rsp.Body != nil {
 		w.AppendBulk(rsp.Body)
 	}
 	rsp.w = w

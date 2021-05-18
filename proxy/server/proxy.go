@@ -32,9 +32,9 @@ func New() *Proxy {
 	p := &Proxy{
 		log: global.GetLogger("Proxy: "),
 	}
-	switch config.Cluster {
+	switch global.Options.GetClusterType() {
 	case config.StaticCluster:
-		p.cluster = cluster.NewStaticCluster(config.NumLambdaClusters)
+		p.cluster = cluster.NewStaticCluster(global.Options.GetNumFunctions())
 	default:
 		p.cluster = cluster.NewMovingWindow()
 	}
@@ -82,7 +82,7 @@ func (p *Proxy) Release() {
 }
 
 // HandleSet "set chunk" handler
-func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
+func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	client := redeo.GetClient(c.Context())
 
 	// Get args
@@ -104,6 +104,8 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		return
 	}
 	bodyStream.(resp.Holdable).Hold() // Hold to prevent being closed
+
+	p.log.Debug("HandleSet %s: %d@%s", reqId, dChunkId, key)
 
 	// Start counting time.
 	collectEntry, _ := collector.CollectRequest(collector.LogStart, nil, protocol.CMD_SET, reqId, chunkId, time.Now().UnixNano())
@@ -142,11 +144,17 @@ func (p *Proxy) HandleSet(w resp.ResponseWriter, c *resp.CommandStream) {
 		postProcess(p.dropEvicted)
 		// continue
 	}
-	p.log.Debug("Requested to set %s to node %d", chunkKey, meta.Placement[dChunkId])
 }
 
 // HandleGet "get chunk" handler
-func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
+func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
+	// Response with pong to confirm the preflight test.
+	// w.AppendBulkString(protocol.CMD_PONG)
+	// if err := w.Flush(); err != nil {
+	// 	// Network error, abandon request
+	// 	return
+	// }
+
 	client := redeo.GetClient(c.Context())
 	key := c.Arg(0).String()
 	reqId := c.Arg(1).String()
@@ -166,6 +174,7 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 		w.Flush()
 		return
 	}
+
 	lambdaDest := meta.Placement[dChunkId]
 	counter := global.ReqCoordinator.Register(reqId, protocol.CMD_GET, meta.DChunks, meta.PChunks)
 	chunkKey := meta.ChunkKey(int(dChunkId))
@@ -181,6 +190,26 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 	}
 	// Update counter
 	counter.Requests[dChunkId] = req
+
+	p.log.Debug("HandleGet %s: %s from %d", reqId, chunkKey, lambdaDest)
+
+	// Validate the status of meta. If evicted, replace. All chunks will be replaced, so fulfill shortcut is not applicable here.
+	// Not all placers support eviction.
+	if meta.Deleted {
+		// Unlikely, just to be safe
+		p.log.Debug("replace evicted chunk %s", chunkKey)
+
+		_, postProcess, err := p.placer.Place(meta, int(dChunkId), req.ToRecover())
+		if err != nil {
+			w.AppendError(err.Error())
+			w.Flush()
+			return
+		}
+		if postProcess != nil {
+			postProcess(p.dropEvicted)
+		}
+		return
+	}
 
 	// Send request to lambda channel
 	if counter.IsFulfilled() {
@@ -209,6 +238,8 @@ func (p *Proxy) HandleGet(w resp.ResponseWriter, c *resp.Command) {
 // HandleCallback callback handler
 func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 	wrapper := r.(*types.ProxyResponse)
+	client := redeo.GetClient(wrapper.Context())
+
 	switch rsp := wrapper.Response.(type) {
 	case *types.Response:
 		t := time.Now()
@@ -223,14 +254,18 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		case protocol.CMD_SET:
 			rsp.PrepareForSet(w)
 		default:
-			p.log.Error("Unsupport request on proxy reponse: %s", wrapper.Request.Cmd)
+			w.AppendErrorf("unable to respond unsupport command %s", wrapper.Request.Cmd)
+			if err := w.Flush(); err != nil {
+				client.Conn().Close()
+			}
 			return
 		}
 		d1 := time.Since(t)
 		t2 := time.Now()
 		// flush buffer, return on errors
 		if err := rsp.Flush(); err != nil {
-			p.log.Error("Error on flush response: %v", err)
+			p.log.Warn("Error on flush response %v: %v", rsp, err)
+			client.Conn().Close()
 			return
 		}
 
@@ -240,7 +275,7 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		//	"Server Flush time is", time2,
 		//	"Chunk body len is ", len(rsp.Body))
 		tgg := time.Now()
-		if _, err := collector.CollectRequest(collector.LogServer2Client, wrapper.Request.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId,
+		if _, err := collector.CollectRequest(collector.LogServer2Client, wrapper.Request.CollectorEntry,
 			int64(tgg.Sub(t)), int64(d1), int64(d2), tgg.UnixNano()); err != nil {
 			p.log.Warn("LogServer2Client err %v", err)
 		}
@@ -287,7 +322,10 @@ func (p *Proxy) HandleCallback(w resp.ResponseWriter, r interface{}) {
 		// Use more general way to deal error
 	default:
 		w.AppendErrorf("%v", rsp)
-		w.Flush()
+		if err := w.Flush(); err != nil {
+			client.Conn().Close()
+			return
+		}
 	}
 }
 

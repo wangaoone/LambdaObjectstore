@@ -1,8 +1,6 @@
 package lambdastore
 
 import (
-	"strconv"
-
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
@@ -161,7 +159,7 @@ func (b *Backups) StartByIndex(i int, target *Instance) (*Instance, bool) {
 	if i >= len(backups) || backups[i] == nil {
 		return nil, false
 	} else {
-		backups[i].StartBacking(target, i, b.required)
+		go backups[i].StartBacking(target, i, b.required) // Use go routing to avoid deadlock
 		return b.getInstance(backups[i], i), true
 	}
 }
@@ -169,7 +167,7 @@ func (b *Backups) StartByIndex(i int, target *Instance) (*Instance, bool) {
 func (b *Backups) Stop(target *Instance) {
 	for _, backup := range b.backups {
 		if backup != nil {
-			backup.StopBacking(target)
+			go backup.StopBacking(target) // Use go routing to avoid deadlock
 		}
 	}
 	// Ensure a second call to ResumeServing is safe
@@ -249,10 +247,10 @@ func (b *Backups) getInstance(backer Backer, i int) *Instance {
 	return backer.(*Instance)
 }
 
-func (b *Backups) describeInstance(ins *Instance) string {
-	if ins == nil {
-		return "<nil>"
-	} else {
-		return strconv.FormatUint(ins.Id(), 10)
-	}
-}
+// func (b *Backups) describeInstance(ins *Instance) string {
+// 	if ins == nil {
+// 		return "<nil>"
+// 	} else {
+// 		return strconv.FormatUint(ins.Id(), 10)
+// 	}
+// }

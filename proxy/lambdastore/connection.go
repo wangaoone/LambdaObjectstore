@@ -3,8 +3,8 @@ package lambdastore
 import (
 	"errors"
 	"fmt"
-	"io"
 	"net"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -23,119 +23,294 @@ var (
 		Prefix: "Undesignated ",
 		Color:  !global.Options.NoColor,
 	}
-	ErrConnectionClosed = errors.New("connection closed")
-	ErrMissingResponse  = errors.New("missing response")
+	readerPool sync.Pool
+	writerPool sync.Pool
+
+	ErrConnectionClosed  = errors.New("connection closed")
+	ErrMissingResponse   = errors.New("missing response")
+	ErrUnexpectedCommand = errors.New("unexpected command")
+	ErrUnexpectedType    = errors.New("unexpected type")
 )
 
 type Connection struct {
+	Id uint32
 	net.Conn
-	workerId int32       // Identify a unique lambda worker
-	control  bool        // Identify if the connection is control link or not.
-	dataLink *Connection // Only works for the control link to find its data link.
+	workerId int32 // Identify a unique lambda worker
+	control  bool  // Identify if the connection is control link or not.
+	lm       *LinkManager
 
-	instance *Instance
-	log      logger.ILogger
-	w        *resp.RequestWriter
-	r        resp.ResponseReader
-	mu       sync.Mutex
-	chanWait chan *types.Request
-	respType chan interface{}
-	closed   chan struct{}
+	instance    *Instance
+	log         logger.ILogger
+	w           *resp.RequestWriter
+	r           resp.ResponseReader
+	mu          sync.Mutex
+	chanWait    chan *types.Request
+	headRequest *types.Request
+	respType    chan interface{}
+	closed      chan struct{}
 }
 
-func NewConnection(c net.Conn) *Connection {
+func NewConnection(cn net.Conn) *Connection {
 	conn := &Connection{
-		Conn: c,
-		log:  defaultConnectionLog,
-		// wrap writer and reader
-		w:        resp.NewRequestWriter(c),
-		r:        resp.NewResponseReader(c),
+		Conn:     cn,
+		log:      defaultConnectionLog,
 		chanWait: make(chan *types.Request, 1),
 		respType: make(chan interface{}),
 		closed:   make(chan struct{}),
+	}
+	if v := readerPool.Get(); v != nil {
+		rd := v.(resp.ResponseReader)
+		rd.Reset(cn)
+		conn.r = rd
+	} else {
+		conn.r = resp.NewResponseReader(cn)
+	}
+	if v := writerPool.Get(); v != nil {
+		wr := v.(*resp.RequestWriter)
+		wr.Reset(cn)
+		conn.w = wr
+	} else {
+		conn.w = resp.NewRequestWriter(cn)
 	}
 	defaultConnectionLog.Level = global.Log.GetLevel()
 	return conn
 }
 
 func (conn *Connection) String() string {
-	return fmt.Sprintf("%d%s", conn.workerId, util.Ifelse(conn.control, "c", "d"))
+	if conn.control {
+		return fmt.Sprintf("%d%s", conn.workerId, "c")
+	} else {
+		return fmt.Sprintf("%d%s-%d", conn.workerId, "d", conn.Id)
+	}
 }
 
 func (conn *Connection) Writer() *resp.RequestWriter {
 	return conn.w
 }
 
-func (conn *Connection) BindInstance(ins *Instance) {
+func (conn *Connection) IsSameWorker(another *Connection) bool {
+	if another == nil {
+		return false
+	}
+	return conn.workerId == another.workerId
+}
+
+func (conn *Connection) BindInstance(ins *Instance) *Connection {
 	if conn.instance == ins {
-		return
+		return conn
 	}
 
 	conn.instance = ins
+	conn.lm = ins.lm
 	conn.log = ins.log
 	if l, ok := conn.log.(*logger.ColorLogger); ok {
 		copied := *l
 		copied.Prefix = fmt.Sprintf("%s%v ", copied.Prefix, conn)
 		conn.log = &copied
 	}
+	return conn
 }
 
-func (conn *Connection) GetDataLink() *Connection {
-	return conn.dataLink
-}
-
-func (conn *Connection) AddDataLink(link *Connection) bool {
-	if conn.workerId != link.workerId {
-		return false
+func (conn *Connection) SendControl(ctrl *types.Control) error {
+	switch ctrl.Name() {
+	case protocol.CMD_DATA:
+		ctrl.PrepareForData(conn)
+	case protocol.CMD_MIGRATE:
+		ctrl.PrepareForMigrate(conn)
+	case protocol.CMD_DEL:
+		ctrl.PrepareForDel(conn)
+	case protocol.CMD_RECOVER:
+		ctrl.PrepareForRecover(conn)
+	default:
+		conn.log.Error("Unexpected control command: %s", ctrl)
+		return ErrUnexpectedCommand
 	}
 
-	conn.dataLink = link
-	conn.log.Debug("Data link added:%v", link)
-	return true
+	if err := ctrl.Flush(); err != nil {
+		conn.log.Error("Flush control error: %v - %v", ctrl, err)
+		conn.Close()
+		return err
+	}
+
+	return nil
 }
 
-func (conn *Connection) RemoveDataLink(link *Connection) {
-	if conn.dataLink != nil && conn.dataLink == link {
-		conn.dataLink = nil
+func (conn *Connection) SendRequest(req *types.Request, args ...interface{}) error {
+	useDataLink := false
+	if len(args) > 0 {
+		useDataLink, _ = args[0].(bool)
+	}
+
+	if !conn.control {
+		conn.log.Debug("Sending %v(wait: %d)", req, len(conn.chanWait))
+		select {
+		case conn.chanWait <- req:
+			return conn.sendRequest(req)
+		case <-conn.closed: // Final defense, bounce back to instance and retry.
+			return ErrConnectionClosed
+		}
+	} else if useDataLink {
+		conn.log.Debug("Waiting for available data link %v", req)
+		availableLink := conn.lm.GetAvailableForRequest()
+		select {
+		case availableLink.Request() <- req:
+			return availableLink.Error()
+		case <-conn.closed: // Final defense, bounce back to instance and retry.
+			return ErrConnectionClosed
+		}
+	} else {
+		conn.log.Debug("Waiting for available link %v", req)
+		availableLink := conn.lm.GetAvailableForRequest()
+		select {
+		case conn.chanWait <- req:
+			return conn.sendRequest(req)
+		case availableLink.Request() <- req:
+			return availableLink.Error()
+		case <-conn.closed: // Final defense, bounce back to instance and retry.
+			return ErrConnectionClosed
+		}
 	}
 }
 
+func (conn *Connection) sendRequest(req *types.Request) error {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	if conn.isClosedLocked() {
+		return ErrConnectionClosed
+	}
+
+	// In case there is a request already, wait to be consumed (for response).
+	// Lock free: request sent after headRequest get set.
+	// Moved to SendRequest start
+	// conn.log.Debug("Waiting for sending %v(wait: %d)", req, len(conn.chanWait))
+	// conn.chanWait <- req
+	// Moved end
+	conn.headRequest = req
+	if req.IsResponded() {
+		conn.popRequest()
+		return nil
+	}
+
+	switch req.Name() {
+	case protocol.CMD_SET:
+		req.PrepareForSet(conn)
+	case protocol.CMD_GET:
+		req.PrepareForGet(conn)
+	case protocol.CMD_DEL:
+		req.PrepareForDel(conn)
+	case protocol.CMD_RECOVER:
+		req.PrepareForRecover(conn)
+	default:
+		conn.SetErrorResponse(fmt.Errorf("unexpected request command: %s", req))
+		conn.flagAvailable()
+		// Unrecoverable
+		return nil
+	}
+
+	// Updated by Tianium: 20210504
+	// Write timeout is meaningless: small data will be buffered and always success, blobs will be handled by both ends.
+	// TODO: If neccessary (like add support to multi-layer relay), add read timeout on client.
+	if err := req.Flush(); err != nil {
+		conn.SetErrorResponse(err)
+		conn.log.Warn("Flush request error: %v - %v", req, err)
+		conn.closeLocked()
+		return err
+	}
+	// Set timeout for response.
+	req.SetTimeout(ResponseTimeout)
+	go func() {
+		if err := req.Timeout(); err != nil && req.SetResponse(err) { // If req is responded, err has been reported somewhere.
+			conn.log.Warn("Request timeout: %v", req)
+			conn.popRequest()
+			// close connection to discard late response.
+			conn.Close()
+		}
+	}()
+
+	return nil
+}
+
+func (conn *Connection) peekRequest() *types.Request {
+	return conn.headRequest
+}
+
+func (conn *Connection) popRequest() *types.Request {
+	conn.headRequest = nil
+	select {
+	case req := <-conn.chanWait:
+		return req
+	default:
+		return nil
+	}
+}
+
+// func (conn *Connection) isRequestPending() bool {
+// 	return len(conn.chanWait) > 0
+// }
+
+// Close Signal connection should be closed. Function close() will be called later for actural operation
 func (conn *Connection) Close() error {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
-	select {
-	case <-conn.closed:
-		// already closed
+	return conn.closeLocked()
+}
+
+// close must be called from ServeLambda()
+func (conn *Connection) close() {
+	// Notify instance.
+	if conn.instance != nil {
+		conn.instance.FlagClosed(conn)
+	}
+
+	// Call signal function to avoid duplicated close.
+	conn.Close()
+
+	// Clear pending requests after TCP connection closed, so current request got chance to return first.
+	conn.ClearResponses()
+	var w, r interface{}
+	conn.w, w = nil, conn.w
+	conn.r, r = nil, conn.r
+	readerPool.Put(r)
+	writerPool.Put(w)
+
+	conn.log.Debug("Closed.")
+}
+
+func (conn *Connection) closeLocked() error {
+	if conn.isClosedLocked() {
 		return nil
-	default:
 	}
 
 	// Signal closed only. This allow ongoing transmission to finish.
 	conn.log.Debug("Signal to close.")
 	close(conn.closed)
 
-	if conn.dataLink != nil {
-		conn.dataLink.Close()
-		conn.dataLink = nil
-	}
-
-	return nil
-}
-
-func (conn *Connection) close() {
-	if conn.instance != nil {
-		conn.instance.FlagClosed(conn)
-	}
-	conn.Close()
-	conn.bye()
 	// Don't use conn.Conn.Close(), it will stuck and wait for lambda.
+	// 1. If lambda is running, lambda will close the connection.
+	//    When we close it here, the connection has been closed.
+	// 2. In current implementation, the instance will close the connection
+	///   if the lambda will not respond to the link any more.
+	//    For data link, it is when the lambda has returned.
+	//    For ctrl link, it is likely that the system is shutting down.
+	// 3. If we know lambda is active, close conn.Conn first.
 	if tcp, ok := conn.Conn.(*net.TCPConn); ok {
 		tcp.SetLinger(0) // The operating system discards any unsent or unacknowledged data.
 	}
 	conn.Conn.Close()
-	conn.clearResponses()
-	conn.log.Debug("Closed.")
+
+	return nil
+}
+
+func (conn *Connection) isClosedLocked() bool {
+	select {
+	case <-conn.closed:
+		// already closed
+		return true
+	default:
+		return false
+	}
 }
 
 // blocking on lambda peek Type
@@ -152,13 +327,8 @@ func (conn *Connection) ServeLambda() {
 		var retPeek interface{}
 		select {
 		case <-conn.closed:
-			if len(conn.chanWait) > 0 {
-				// Is there request waiting?
-				retPeek = <-conn.respType
-			} else {
-				conn.close()
-				return
-			}
+			conn.close()
+			return
 		case retPeek = <-conn.respType:
 		}
 
@@ -168,10 +338,14 @@ func (conn *Connection) ServeLambda() {
 		var respType resp.ResponseType
 		switch ret := retPeek.(type) {
 		case error:
-			if ret == io.EOF {
-				conn.log.Warn("Lambda store disconnected.")
+			if util.IsConnectionFailed(ret) {
+				if conn.control {
+					conn.log.Warn("Lambda store disconnected.")
+				} else {
+					conn.log.Debug("Disconnected.")
+				}
 			} else {
-				conn.log.Warn("Failed to peek response type: %v", ret)
+				conn.log.Warn("Failed to peek response type: %s", ret.Error())
 			}
 			conn.close()
 			return
@@ -179,25 +353,23 @@ func (conn *Connection) ServeLambda() {
 			respType = ret
 		}
 
+		var readErr error
 		start := time.Now()
 		switch respType {
 		case resp.TypeError:
 			strErr, err := conn.r.ReadError()
 			if err != nil {
-				err = fmt.Errorf("response error (Unknown): %v", err)
-			} else {
-				err = fmt.Errorf("response error: %s", strErr)
+				readErr = err
+				break
 			}
+			err = fmt.Errorf("response error: %s", strErr)
 			conn.log.Warn("%v", err)
 			conn.SetErrorResponse(err)
-		default:
+			conn.flagAvailable()
+		case resp.TypeBulk:
 			cmd, err := conn.r.ReadBulkString()
-			if err != nil && err == io.EOF {
-				conn.log.Warn("Lambda store disconnected.")
-				conn.close()
-				break
-			} else if err != nil {
-				conn.log.Warn("Error on read response type: %v", err)
+			if err != nil {
+				readErr = err
 				break
 			}
 
@@ -227,14 +399,68 @@ func (conn *Connection) ServeLambda() {
 			case protocol.CMD_RECOVER:
 				conn.recoverHandler()
 			default:
-				conn.log.Warn("Unsupported response type: %s", cmd)
+				conn.log.Warn("Unsupported response type: %s", logger.SafeString(cmd, 20))
 			}
+		default:
+			if err := conn.skipField(respType); err != nil {
+				readErr = err
+			}
+		}
+
+		if readErr != nil {
+			if !util.IsConnectionFailed(readErr) {
+				conn.log.Warn("Error on handle response %s: %v", respType, readErr)
+			} else if conn.control {
+				conn.log.Warn("Lambda store disconnected.")
+			} else {
+				conn.log.Debug("Disconnected.")
+			}
+			conn.close()
+			return
 		}
 
 		if conn.instance != nil {
 			conn.instance.flagWarmed()
 		}
 	}
+}
+
+func (conn *Connection) skipField(t resp.ResponseType) error {
+	if t == resp.TypeUnknown {
+		var err error
+		t, err = conn.r.PeekType()
+		if err != nil {
+			return err
+		}
+	}
+
+	switch t {
+	case resp.TypeArray:
+		if arrLen, err := conn.r.ReadArrayLen(); err != nil {
+			return err
+		} else {
+			conn.log.Warn("Skipping %s of len %d", t, arrLen)
+			for i := 0; i < arrLen; i++ {
+				if err := conn.skipField(resp.TypeUnknown); err != nil {
+					return err
+				}
+			}
+		}
+	case resp.TypeBulk:
+		conn.log.Warn("Skipping %s", t)
+		if err := conn.r.SkipBulk(); err != nil {
+			return err
+		}
+	case resp.TypeUnknown:
+		return ErrUnexpectedType
+	default:
+		conn.log.Warn("Skipping %s", t)
+		// We just want read a line, ignore other error
+		if _, err := conn.r.ReadInlineString(); err != nil && !resp.IsProtocolError(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func (conn *Connection) Ping(payload []byte) {
@@ -246,70 +472,100 @@ func (conn *Connection) Ping(payload []byte) {
 	err := conn.w.Flush()
 	if err != nil {
 		conn.log.Warn("Flush ping error: %v", err)
+		conn.Close()
 	}
 }
 
-func (conn *Connection) SetResponse(rsp *types.Response) (*types.Request, bool) {
-	if len(conn.chanWait) == 0 {
-		conn.log.Error("Unexpected response: %v", rsp)
+// SetResponse Set response for last request.
+// If parameter release is set, the connection will be flagged available.
+func (conn *Connection) SetResponse(rsp *types.Response, release bool) (*types.Request, bool) {
+	// Last request can be responded, either bacause error or timeout, which causes nil or unmatch
+	req := conn.peekRequest()
+	if req == nil || !req.IsResponse(rsp) {
+		// ignore
+		conn.log.Debug("response discarded: %v", rsp)
 		return nil, false
 	}
-	for req := range conn.chanWait {
-		if req.IsResponse(rsp) {
-			conn.log.Debug("response matched: %v", req.Id)
 
-			return req, req.SetResponse(rsp)
+	// Lock free: double check that poped is what we peeked.
+	if poped := conn.popRequest(); poped == req {
+		if release {
+			conn.flagAvailable()
 		}
-		conn.log.Warn("passing req: %v, got %v", req, rsp)
-		req.SetResponse(ErrMissingResponse)
-
-		if len(conn.chanWait) == 0 {
-			break
-		}
+		conn.log.Debug("response matched: %v", req)
+		return req, req.SetResponse(rsp)
 	}
+
 	return nil, false
 }
 
-func (conn *Connection) SetErrorResponse(err error) {
-	if len(conn.chanWait) == 0 {
-		conn.log.Error("Unexpected error response: %v", err)
-		return
+// SetErrorResponse Set response to last request as a error.
+//   You may need to flag the connection as available manually depends on the error.
+func (conn *Connection) SetErrorResponse(err error) bool {
+	if req := conn.popRequest(); req != nil {
+		return req.SetResponse(err)
 	}
-	for req := range conn.chanWait {
-		req.SetResponse(err)
-		break
-	}
+
+	conn.log.Warn("Unexpected error response: no request pending. err: %v", err)
+	return false
 }
 
-func (conn *Connection) clearResponses() {
-	if len(conn.chanWait) == 0 {
-		return
-	}
-	for req := range conn.chanWait {
+func (conn *Connection) ClearResponses() {
+	req := conn.popRequest()
+	for req != nil {
 		req.SetResponse(ErrConnectionClosed)
-		if len(conn.chanWait) == 0 {
-			break
-		}
+		// Yield for pending req a chance to push.
+		runtime.Gosched()
+
+		req = conn.popRequest()
 	}
 }
 
 func (conn *Connection) peekResponse() {
-	respType, err := conn.r.PeekType()
+	r := conn.r
+	if r == nil {
+		return
+	}
+
+	var ret interface{}
+	ret, err := r.PeekType()
 	if err != nil {
-		conn.respType <- err
-	} else {
-		conn.respType <- respType
+		ret = err
+	}
+	select {
+	case conn.respType <- ret:
+	default:
+		// No consumer. The connection must be closed, abandon.
 	}
 }
 
 func (conn *Connection) closeIfError(prompt string, err error) bool {
 	if err != nil {
 		conn.log.Warn(prompt, err)
-		conn.close()
+		conn.Close()
 		return true
 	}
 
 	return false
+}
+
+func (conn *Connection) flagAvailable() bool {
+	if conn.control || conn.lm == nil {
+		return false
+	}
+
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	select {
+	case <-conn.closed:
+		// already closed
+		return false
+	default:
+	}
+
+	conn.lm.FlagAvailableForRequest(conn)
+	return true
 }
 
 func (conn *Connection) pongHandler() {
@@ -348,7 +604,7 @@ func (conn *Connection) pongHandler() {
 		conn.log.Debug("PONG from lambda confirmed.")
 	} else {
 		conn.log.Warn("Discard rouge PONG for %d.", storeId)
-		conn.close()
+		conn.Close()
 	}
 }
 
@@ -369,29 +625,38 @@ func (conn *Connection) getHandler(start time.Time) {
 	// Exhaust all values to keep protocol aligned.
 	reqId, _ := conn.r.ReadBulkString()
 	chunkId, _ := conn.r.ReadBulkString()
-	counter := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
+	recovered, _ := conn.r.ReadInt()
+
+	rsp := &types.Response{Cmd: protocol.CMD_GET}
+	rsp.Id.ReqId = reqId
+	rsp.Id.ChunkId = chunkId
+	rsp.Status = recovered
+	chunk, _ := strconv.Atoi(chunkId)
+
+	counter, _ := global.ReqCoordinator.Load(reqId).(*global.RequestCounter)
 	if counter == nil {
 		conn.log.Warn("Request not found: %s", reqId)
-		// exhaust value field
+		// Set response and exhaust value
+		_, responded := conn.SetResponse(rsp, false)
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on request mismatch: %v", err)
+			conn.Close()
+			return
+		} else if responded && conn.ackCommand(rsp.Cmd) == nil {
+			conn.flagAvailable()
 		}
 		return
 	}
 
-	rsp := &types.Response{Cmd: "get"}
-	rsp.Id.ReqId = reqId
-	rsp.Id.ChunkId = chunkId
-	chunk, _ := strconv.Atoi(chunkId)
-
-	status := counter.AddSucceeded(chunk)
+	status := counter.AddSucceeded(chunk, recovered == 1)
 	// Check if chunks are enough? Shortcut response if YES.
 	if counter.IsLate(status) {
 		conn.log.Debug("GOT %v, abandon.", rsp.Id)
 		// Most likely, the req has been abandoned already. But we still need to consume the connection side req.
-		req, _ := conn.SetResponse(rsp)
+		// Connection will not be flagged available until SkipBulk() is executed.
+		req, _ := conn.SetResponse(rsp, false)
 		if req != nil {
-			_, err := collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
+			_, err := collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 			if err != nil {
 				conn.log.Warn("LogProxy err %v", err)
 			}
@@ -401,6 +666,10 @@ func (conn *Connection) getHandler(start time.Time) {
 		// Consume and abandon the response.
 		if err := conn.r.SkipBulk(); err != nil {
 			conn.log.Warn("Failed to skip bulk on abandon: %v", err)
+			conn.Close()
+			return
+		} else if conn.ackCommand(rsp.Cmd) == nil {
+			conn.flagAvailable()
 		}
 		return
 	}
@@ -408,17 +677,20 @@ func (conn *Connection) getHandler(start time.Time) {
 	var err error
 	rsp.BodyStream, err = conn.r.StreamBulk()
 	if err != nil {
+		conn.SetErrorResponse(err)
 		conn.log.Warn("Failed to get body reader of response: %v", err)
+		conn.Close()
+		return
 	}
 	rsp.BodyStream.(resp.Holdable).Hold()
-	defer rsp.BodyStream.Close()
 
-	conn.log.Debug("GOT %v, confirmed.", rsp.Id)
-	if req, ok := conn.SetResponse(rsp); !ok {
+	conn.log.Debug("GOT %v, confirmed. size:%d", rsp.Id, rsp.BodyStream.Len())
+	// Connection will not be flagged available until BodyStream is closed.
+	if req, ok := conn.SetResponse(rsp, false); !ok {
 		// Failed to set response, release hold.
 		rsp.BodyStream.(resp.Holdable).Unhold()
 	} else {
-		collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
+		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), recovered)
 	}
 	// Abandon rest chunks.
 	if counter.IsFulfilled(status) && !counter.IsAllReturned() { // IsAllReturned will load updated status.
@@ -430,19 +702,27 @@ func (conn *Connection) getHandler(start time.Time) {
 			}
 		}
 	}
+
+	rsp.BodyStream.Close() // Close will block until BodyStream unhold.
+	if conn.ackCommand(rsp.Cmd) == nil {
+		conn.flagAvailable()
+	}
 }
 
 func (conn *Connection) setHandler(start time.Time) {
 	conn.log.Debug("SET from lambda.")
 
-	rsp := &types.Response{Cmd: "set", Body: []byte(strconv.FormatUint(conn.instance.Id(), 10))}
+	rsp := &types.Response{Cmd: protocol.CMD_SET, Body: []byte(strconv.FormatUint(conn.instance.Id(), 10))}
 	rsp.Id.ReqId, _ = conn.r.ReadBulkString()
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("SET %v, confirmed.", rsp.Id)
-	req, ok := conn.SetResponse(rsp)
+	req, ok := conn.SetResponse(rsp, false)
 	if ok {
-		collector.CollectRequest(collector.LogProxy, req.CollectorEntry.(*collector.DataEntry), rsp.Cmd, rsp.Id.ReqId, rsp.Id.ChunkId, start.UnixNano(), int64(time.Since(start)), int64(0))
+		collector.CollectRequest(collector.LogProxy, req.CollectorEntry, start.UnixNano(), int64(time.Since(start)), int64(0), int64(0))
+	}
+	if conn.ackCommand(rsp.Cmd) == nil {
+		conn.flagAvailable()
 	}
 }
 
@@ -455,7 +735,10 @@ func (conn *Connection) delHandler() {
 	rsp.Id.ChunkId, _ = conn.r.ReadBulkString()
 
 	conn.log.Debug("DEL %v, confirmed.", rsp.Id)
-	conn.SetResponse(rsp) // if del is control cmd, should return False
+	conn.SetResponse(rsp, false) // if del is control cmd, should return False
+	if conn.ackCommand(rsp.Cmd) == nil {
+		conn.flagAvailable()
+	}
 }
 
 func (conn *Connection) receiveData() {
@@ -495,4 +778,15 @@ func (conn *Connection) recoverHandler() {
 	} else {
 		ctrl.(*types.Control).Callback(ctrl.(*types.Control), conn.instance)
 	}
+	conn.ackCommand(protocol.CMD_RECOVER)
+}
+
+func (conn *Connection) ackCommand(cmd string) error {
+	conn.w.WriteCmd(protocol.CMD_ACK)
+	if err := conn.w.Flush(); err != nil {
+		conn.log.Warn("Failed to acknowledge %s: %v", cmd, err)
+		conn.Close()
+		return err
+	}
+	return nil
 }

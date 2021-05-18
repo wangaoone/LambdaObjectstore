@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io/ioutil"
 	syslog "log"
@@ -9,6 +8,8 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"runtime"
+	"runtime/pprof"
 	"sync"
 	"syscall"
 
@@ -29,6 +30,7 @@ var (
 	sig      = make(chan os.Signal, 1)
 	dash     *dashboard.Dashboard
 	logFile  *os.File
+	stdErr   *os.File = os.Stderr
 	panicErr interface{}
 )
 
@@ -44,7 +46,20 @@ func main() {
 	defer finalize(false) // We need to call finalize in every goroutine.
 
 	var done sync.WaitGroup
-	checkUsage(options)
+	global.CheckUsage(options)
+
+	if global.Options.CpuProfile != "" {
+		f, err := os.Create(global.Options.CpuProfile)
+		if err != nil {
+			log.Error("could not create CPU profile: %v", err)
+		}
+		defer f.Close() // error handling omitted for example
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Error("could not start CPU profile: %v", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
+
 	if options.Debug {
 		log.Level = logger.LOG_LEVEL_ALL
 	}
@@ -55,12 +70,11 @@ func main() {
 		if panicErr != nil {
 			panic(panicErr)
 		}
- 
+
 		syslog.SetOutput(logFile)
-	} 
-	log.Info("config.LambdaPrefix (initially) = %s", config.LambdaPrefix)
-	config.LambdaPrefix = options.LambdaPrefix
-	log.Info("config.LambdaPrefix (after passing value from command-line) = %s", config.LambdaPrefix)
+		os.Stderr = logFile
+	}
+
 	// CPU profiling by default
 	//defer profile.Start().Stop()
 	// test comment, please ignore/feel free to remove me
@@ -70,7 +84,7 @@ func main() {
 	clientLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort))
 	if err != nil {
 		log.Error("Failed to listen clients: %v", err)
-		return 
+		return
 	}
 	lambdaLis, err := net.Listen("tcp", fmt.Sprintf(":%d", global.BasePort+1))
 	if err != nil {
@@ -98,8 +112,8 @@ func main() {
 	}
 
 	// config server
-	srv.HandleStreamFunc(protocol.CMD_SET_CHUNK, prxy.HandleSet)
-	srv.HandleFunc(protocol.CMD_GET_CHUNK, prxy.HandleGet)
+	srv.HandleStreamFunc(protocol.CMD_SET_CHUNK, prxy.HandleSetChunk)
+	srv.HandleFunc(protocol.CMD_GET_CHUNK, prxy.HandleGetChunk)
 	srv.HandleCallbackFunc(prxy.HandleCallback)
 
 	// Log goroutine
@@ -132,7 +146,7 @@ func main() {
 	}()
 	prxy.WaitReady()
 	if dash != nil {
-		dash.ClusterView.Update()
+		dash.Update()
 	}
 
 	// Pid is only written after ready
@@ -160,51 +174,17 @@ func main() {
 	// Wait for data collection
 	done.Wait()
 	prxy.Release()
-}
 
-func checkUsage(options *global.CommandlineOptions) {
-	var printInfo bool
-	flag.BoolVar(&printInfo, "h", false, "help info?")
-
-	flag.BoolVar(&options.Debug, "debug", true, "Enable debug and print debug logs.")
-	flag.StringVar(&options.Prefix, "prefix", "log", "Prefix for data files.")
-	flag.StringVar(&options.LambdaPrefix, "lambda-prefix", "CacheNode0-", "Prefix of the Lambda functions.")
-	flag.IntVar(&options.D, "d", 10, "The number of data chunks for build-in redis client.")
-	flag.IntVar(&options.P, "p", 2, "The number of parity chunks for build-in redis client.")
-	// flag.BoolVar(&options.NoDashboard, "disable-dashboard", true, "Disable dashboard")
-	showDashboard := flag.Bool("enable-dashboard", false, "Enable dashboard")
-	flag.BoolVar(&options.NoColor, "disable-color", false, "Disable color log")
-	flag.StringVar(&options.Pid, "pid", "/tmp/infinicache.pid", "Path to the pid.")
-	flag.StringVar(&options.LogPath, "base", "", "Path to the log file.")
-	flag.StringVar(&options.LogFile, "log", "", "File name of the log. If dashboard is not disabled, the default value is \"log\".")
-	flag.BoolVar(&options.Evaluation, "enable-evaluation", false, "Enable evaluation settings.")
-	flag.IntVar(&options.NumBackups, "numbak", 0, "EVALUATION ONLY: The number of backups used per node.")
-	flag.BoolVar(&options.NoFirstD, "disable-first-d", false, "EVALUATION ONLY: Disable first-d optimization.")
-	flag.Uint64Var(&options.FuncCapacity, "funcap", 0, "EVALUATION ONLY: Preset capacity(MB) of function instance.")
-
-	flag.Parse()
-	options.NoDashboard = !*showDashboard
-
-	if printInfo {
-		fmt.Fprintf(os.Stderr, "Usage: ./proxy [options]\n")
-		fmt.Fprintf(os.Stderr, "Available options:\n")
-		flag.PrintDefaults()
-		os.Exit(0)
-	}
-
-	config.LambdaPrefix = options.LambdaPrefix
-	log.Info("config.LambdaPrefix = %s", config.LambdaPrefix)
-
-	if !options.NoDashboard {
-		if options.LogFile == "" {
-			options.LogFile = "log"
+	if global.Options.MemProfile != "" {
+		f, err := os.Create(global.Options.MemProfile)
+		if err != nil {
+			log.Error("could not create memory profile: ", err)
 		}
-		// options.NoColor = true
-	}
-
-	if options.Evaluation && options.FuncCapacity == 0 {
-		fmt.Fprintf(os.Stderr, "Since evaluation is enabled, please specify the capacity of function instance with option \"-funcap\".\n")
-		os.Exit(0)
+		defer f.Close() // error handling omitted for example
+		runtime.GC()    // get up-to-date statistics
+		if err := pprof.WriteHeapProfile(f); err != nil {
+			log.Error("could not write memory profile: ", err)
+		}
 	}
 }
 
@@ -225,6 +205,7 @@ func finalize(fix bool) {
 
 	// Rest will be cleared from main routine.
 	if logFile != nil {
+		os.Stderr = stdErr
 		syslog.SetOutput(os.Stdout)
 		logFile.Close()
 		logFile = nil
