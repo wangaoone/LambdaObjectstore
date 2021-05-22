@@ -1,11 +1,12 @@
 package lambdastore
 
 import (
+	"github.com/mason-leap-lab/infinicache/common/logger"
 	protocol "github.com/mason-leap-lab/infinicache/common/types"
 )
 
 type Backer interface {
-	ReserveBacking() bool
+	ReserveBacking() error
 	StartBacking(*Instance, int, int) bool
 	StopBacking(*Instance)
 }
@@ -50,6 +51,7 @@ type Backups struct {
 	availables int
 	locator    protocol.BackupLocator
 	adapter    BackerGetter
+	log        logger.ILogger
 }
 
 func (b *Backups) Reset(num int, candidates []*Instance) {
@@ -62,6 +64,9 @@ func (b *Backups) Reset(num int, candidates []*Instance) {
 	}
 	b.required = num
 	b.candidates = candidates
+	if b.log == nil {
+		b.log = logger.NilLogger
+	}
 }
 
 func (b *Backups) Len() int {
@@ -76,7 +81,7 @@ func (b *Backups) Iter() *BackupIterator {
 	return &BackupIterator{backend: b, i: -1, len: b.availables, backups: b.backups}
 }
 
-func (b *Backups) Reserve(fallback *Instance) int {
+func (b *Backups) Reserve(fallback <-chan *Instance) int {
 	if b.required == 0 {
 		return 0
 	}
@@ -92,34 +97,97 @@ func (b *Backups) Reserve(fallback *Instance) int {
 	changes := 0
 	alters := len(b.backups) // Alternates start from "alters"
 	failures := 0            // Right most continous unavailables
+	closed := 0              // Number of candidates to be removed
 	for i := 0; i < len(b.backups); i++ {
-		if b.getBacker(b.candidates[i]).ReserveBacking() {
-			changes += b.promoteCandidate(i, i)
-			failures = 0
-			continue
-		}
-		// Nothing left
-		if alters >= len(b.candidates) {
-			changes += b.addToBackups(i, fallback)
-			failures++
-			continue
-		}
-		// Try find whatever possible
-		for ; alters < len(b.candidates); alters++ {
-			if b.getBacker(b.candidates[alters]).ReserveBacking() {
-				changes += b.promoteCandidate(i, alters)
+		if b.candidates[i] != nil {
+			if err := b.getBacker(b.candidates[i]).ReserveBacking(); err == nil {
+				changes += b.promoteCandidate(i, i)
 				failures = 0
-				break
+				continue
+			} else if err == ErrInstanceClosed {
+				b.candidates[i] = nil // remove from candidate list
 			}
 		}
-		// Nothing left
-		if alters >= len(b.candidates) {
-			changes += b.addToBackups(i, fallback)
-			failures++
-		} else {
-			// Advance alters
-			alters++
+		// Try find whatever possible
+		for ; alters < len(b.candidates)-closed; alters++ {
+			if err := b.getBacker(b.candidates[alters]).ReserveBacking(); err == nil {
+				changes += b.promoteCandidate(i, alters)
+				failures = 0
+				// Switch demoted to tail if it is closed
+				if b.candidates[alters] == nil {
+					b.candidates[len(b.candidates)-closed-1], b.candidates[alters] = b.candidates[alters], b.candidates[len(b.candidates)-closed-1]
+					closed++
+					alters--
+				}
+				break
+			} else if err == ErrInstanceClosed {
+				// Switch candidate to tail if it is closed
+				b.candidates[len(b.candidates)-closed-1], b.candidates[alters] = nil, b.candidates[len(b.candidates)-closed-1]
+				closed++
+				alters--
+			}
 		}
+		if closed > 0 {
+			b.candidates = b.candidates[:len(b.candidates)-closed]
+			closed = 0
+		}
+
+		if alters < len(b.candidates) {
+			// Found: advance alters
+			alters++
+		} else {
+			// Nothing left
+			changes += b.addToBackups(i, nil)
+			failures++
+		}
+	}
+
+	// Try fallback after all candidates tested, so duplicated fallback will not success.
+	failovers := 0
+	if fallback != nil {
+		newFailures := 0
+
+		for i := 0; i < len(b.backups); i++ {
+			if b.backups[i] != nil {
+				newFailures = 0
+				continue
+			} else if fallback == nil {
+				newFailures++
+				continue
+			}
+
+			found := false
+		ForCandidate:
+			for j := 0; j < b.required; j++ { // Only try a limited time
+				select {
+				case candidate := <-fallback:
+					if candidate == nil {
+						// Fallback closed, abandon rest.
+						fallback = nil
+						break ForCandidate
+					} else if err := candidate.ReserveBacking(); err == nil {
+						b.candidates[i] = candidate
+						b.addToBackups(i, candidate)
+						newFailures = 0
+						failovers++
+						found = true
+						break ForCandidate
+					} // try next
+				default:
+					// Stucked, stop trying.
+					b.log.Warn("%d failovers found before stuck: attempt %d", failovers, j)
+					break ForCandidate
+				}
+			}
+
+			if !found {
+				newFailures++
+			}
+		}
+		failures = newFailures
+	}
+	if failovers > 0 {
+		b.log.Info("%d failover backups added.", failovers)
 	}
 
 	b.locator.Reset(len(b.backups))
