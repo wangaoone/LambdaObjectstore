@@ -41,7 +41,7 @@ if [ "$CODE" == "-code" ] ; then
     aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 else 
     echo -e "Updating "$EMPH"configuration"$RESET" of Lambda deployments ${PREFIX}${start} to ${PREFIX}$((start+cluster)) to $mem MB, $1s timeout..."
-    read -p "Press any key to confirm, or ctrl-C to stop."
+    #read -p "Press any key to confirm, or ctrl-C to stop."
 fi
 
 echo "Updating Lambda deployments..."
