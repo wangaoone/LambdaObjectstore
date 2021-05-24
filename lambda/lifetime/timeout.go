@@ -25,9 +25,6 @@ const TICK_5_ERROR = 10 * time.Millisecond
 const TICK_10_ERROR_EXTEND = 1000 * time.Millisecond
 const TICK_10_ERROR = 2 * time.Millisecond
 
-const BANDWIDTH_FACTOR = 25 // 1/bandwidth, while bandwidth = 40MB/s = 0.04B/ns for single connection
-const STREAMING_TIMEOUT_FACTOR = 10
-
 var (
 	TICK_ERROR_EXTEND = TICK_10_ERROR_EXTEND
 	TICK_ERROR        = TICK_10_ERROR
@@ -77,18 +74,6 @@ func TimeoutAfterWithReturn(f func() (interface{}, error), timeout time.Duration
 	return
 }
 
-func GetStreamingTimeout(size int64) time.Duration {
-	timeout := time.Duration(size * BANDWIDTH_FACTOR * STREAMING_TIMEOUT_FACTOR)
-	if timeout < time.Second {
-		timeout = time.Second
-	}
-	return timeout
-}
-
-func GetStreamingDeadline(size int64) time.Time {
-	return time.Now().Add(GetStreamingTimeout(size))
-}
-
 type Timeout struct {
 	Confirm func(*Timeout) bool
 
@@ -108,6 +93,7 @@ type Timeout struct {
 	timeout       bool
 	due           time.Duration
 	deadline      time.Time
+	busyExtension int
 }
 
 func NewTimeout(s *Session, d time.Duration) *Timeout {
@@ -199,6 +185,7 @@ func (t *Timeout) Reset() bool {
 		return false
 	}
 
+	t.busyExtension = 0
 	t.resetLocked()
 	return true
 }
@@ -263,7 +250,12 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			timeout, due := t.getTimeout(extension)
 			t.due = due
 			t.timer.Reset(timeout)
-			t.log.Debug("Due extended to %v, timeout in %v: %s", due, timeout, t.resetReason)
+			if t.busyExtension < 3 || t.busyExtension%100 == 0 {
+				t.log.Debug("Due extended to %v, timeout in %v: %s", due, timeout, t.resetReason)
+				if t.busyExtension == 3 {
+					t.log.Debug("Log suppressed, timeout in %v: %s", due, timeout, t.resetReason)
+				}
+			}
 		case <-t.timer.C:
 			// Timeout channel should be empty, or we clear it
 			select {
@@ -303,9 +295,12 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 	}
 }
 
+func (t *Timeout) resetOnBusyLocked() {
+	t.busyExtension++
+	t.resetLocked()
+}
+
 func (t *Timeout) resetLocked() {
-	_, t.due = t.getTimeout(t.lastExtension)
-	t.log.Debug("Due expected at %v: %s", t.due, t.lastReason)
 	t.resetReason = t.lastReason
 	select {
 	case t.reset <- t.lastExtension:
@@ -314,6 +309,7 @@ func (t *Timeout) resetLocked() {
 		<-t.reset
 		t.reset <- t.lastExtension
 	}
+	t.busyExtension = 0
 }
 
 func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {
@@ -337,7 +333,7 @@ func (t *Timeout) tryTimeout(confirmed bool) bool {
 	if len(t.reset) > 0 || t.IsDisabled() {
 		return false
 	} else if t.IsBusy() {
-		t.resetLocked()
+		t.resetOnBusyLocked()
 		return false
 	} else if t.Since() < t.due {
 		// FIXME: This is just a precaution check, remove if possible.

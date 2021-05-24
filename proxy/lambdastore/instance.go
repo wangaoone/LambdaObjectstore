@@ -90,8 +90,6 @@ var (
 	TriggerTimeout        = 1 * time.Second       // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
 	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
-	RequestTimeout        = 1 * time.Second
-	ResponseTimeout       = 2 * time.Second
 	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
 	MaxValidationFailure  = 3
 	BackoffFactor         = 2
@@ -1295,7 +1293,7 @@ func (ins *Instance) request(ctrlLink *Connection, cmd types.Command, validateDu
 				ins.writtens.Set(req.Key, &struct{}{})
 			}
 		}
-		return ctrlLink.SendRequest(req, useDataLink, ins.lm.GetAvailableForRequest()) // AvailableLink instance can be reused within one lambda invocation per request.
+		return ctrlLink.SendRequest(req, useDataLink, ins.lm) // Offer lm, so SendRequest is ctrl link free. (We still need to get ctrl link first to confirm lambda status.)
 
 	case *types.Control:
 		isDataRequest := false
