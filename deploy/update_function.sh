@@ -30,7 +30,7 @@ fi
 
 if [ "$CODE" == "-code" ] ; then
     echo -e "Updating "$EMPH"code and configuration"$RESET" of Lambda deployments ${PREFIX}${start} to ${PREFIX}$((start+cluster-1)) to $mem MB, $1s timeout..."
-    read -p "Press any key to confirm, or ctrl-C to stop."
+    #read -p "Press any key to confirm, or ctrl-C to stop."
 
     cd $BASE/../lambda
     echo "Compiling lambda code..."
