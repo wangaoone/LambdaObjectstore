@@ -50,6 +50,3 @@ go run $BASE/deploy_function.go -S3 ${S3} $CODE -config -prefix=$PREFIX -vpc -ke
 if [ "$CODE" == "-code" ] ; then
   rm $KEY*
 fi
-
-DATE_WITH_TIME=`date "+%Y%m%d-%H%M%S"`
-echo {$DATE_WITH_TIME} > last_update.txt

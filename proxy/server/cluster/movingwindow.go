@@ -495,7 +495,7 @@ func (mw *MovingWindow) doScale(evt *types.ScaleEvent) {
 		return
 	}
 
-	mw.log.Debug("Scaleing...")
+	mw.log.Debug("Scaling...")
 
 	// Scale
 	num := mw.numFuncSteps
