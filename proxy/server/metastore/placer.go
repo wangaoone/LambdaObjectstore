@@ -64,6 +64,7 @@ func (l *DefaultPlacer) InsertAndPlace(key string, newMeta *Meta, cmd types.Comm
 	}
 	cmd.GetRequest().Info = meta
 
+	l.log.Debug("In InsertAndPlace, before Place %v", cmd)
 	instance, post, err := l.Place(meta, chunkId, cmd)
 	if err != nil {
 		meta.Placement[chunkId] = InvalidPlacement
@@ -89,6 +90,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 	test := chunkId
 	instances := l.cluster.GetActiveInstances(len(meta.Placement))
 	for {
+		l.log.Debug("In Place, testing %d of %v", test, cmd)
 		// Not test is 0 based.
 		if test >= len(instances) {
 			// Rotation safe: because rotation will not affect the number of active instances.
@@ -103,6 +105,7 @@ func (l *DefaultPlacer) Place(meta *Meta, chunkId int, cmd types.Command) (*lamb
 			continue
 		}
 
+		l.log.Debug("In Place, got %d instances and before test and dispatch %v", len(instances), cmd)
 		ins := instances[test]
 		cmd.GetRequest().InsId = ins.Id()
 		if ins.IsBusy() {

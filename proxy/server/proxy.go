@@ -96,7 +96,7 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	lambdaId, _ := c.NextArg().Int()
 	randBase, _ := c.NextArg().Int()
 
-	p.log.Debug("Serving %s:%d@%s, client: %d", c.Name, dChunkId, key, client.ID())  // New line
+	p.log.Debug("Serving %s:%d@%s, client: %d", c.Name, dChunkId, key, client.ID()) // New line
 
 	bodyStream, err := c.Next()
 	if err != nil {
@@ -125,8 +125,10 @@ func (p *Proxy) HandleSetChunk(w resp.ResponseWriter, c *resp.CommandStream) {
 	}
 
 	// Check if the chunk key(key + chunkId) exists, base of slice will only be calculated once.
+	p.log.Debug("In HandleSetChunk, before InsertAndPlace %v", req)
 	meta, postProcess, err := p.placer.InsertAndPlace(key, prepared, req)
 	if err != nil {
+		p.log.Warn("In HandleSetChunk, got err to place %v: %v", req, err)
 		w.AppendError(err.Error())
 		w.Flush()
 		return
@@ -161,7 +163,7 @@ func (p *Proxy) HandleGetChunk(w resp.ResponseWriter, c *resp.Command) {
 	dChunkId, _ := c.Arg(2).Int()
 	chunkId := strconv.FormatInt(dChunkId, 10)
 
-	p.log.Debug("Serving %s:%d@%s, client: %d", c.Name, dChunkId, key, client.ID())  // New line
+	p.log.Debug("Serving %s:%d@%s, client: %d", c.Name, dChunkId, key, client.ID()) // New line
 
 	// Start couting time.
 	collectorEntry, _ := collector.CollectRequest(collector.LogStart, nil, protocol.CMD_GET, reqId, chunkId, time.Now().UnixNano())
