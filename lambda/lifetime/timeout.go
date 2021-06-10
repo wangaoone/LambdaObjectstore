@@ -124,8 +124,8 @@ func (t *Timeout) StartWithDeadline(deadline time.Time) time.Time {
 	t.deadline = deadline
 
 	// Because timeout must be in seconds, we can calibrate the start time by ceil difference to seconds.
-	lifeInSeconds := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
-	return t.StartWithCalibration(deadline.Add(-lifeInSeconds))
+	life := time.Duration(math.Ceil(float64(time.Until(deadline))/float64(time.Second))) * time.Second
+	return t.StartWithCalibration(deadline.Add(-life))
 }
 
 func (t *Timeout) EndInterruption() time.Time {
@@ -240,6 +240,15 @@ func (t *Timeout) IsDisabled() bool {
 	return atomic.LoadInt32(&t.disabled) > 0
 }
 
+func (t *Timeout) GetDue() time.Time {
+	return t.startAt.Add(t.due)
+}
+
+func (t *Timeout) GetEstimateDue(ext time.Duration) time.Time {
+	_, due := t.getTimeout(ext)
+	return t.startAt.Add(due)
+}
+
 func (t *Timeout) validateTimeout(done <-chan struct{}) {
 	for {
 		select {
@@ -263,24 +272,6 @@ func (t *Timeout) validateTimeout(done <-chan struct{}) {
 			default:
 				// Nothing
 			}
-
-			// t.session.Lock()
-			// // Double check timeout after locked.
-			// if len(t.reset) > 0 || t.IsDisabled() {
-			// 	// pass
-			// } else if t.IsBusy() {
-			// 	t.resetLocked()
-			// } else if t.Since() < t.due {
-			// 	// FIXME: This is just a precaution check, remove if possible.
-			// 	t.log.Debug("Unexpected timeout before due (%v / %v), try reset.", t.Since(), t.due)
-			// 	t.resetLocked()
-			// } else if t.OnTimeout != nil && t.OnTimeout(t) { // Final chance to deny timeout.
-			// 	t.c <- ti
-			// 	t.timeout = true
-			// 	t.OnTimeout = nil
-			// 	t.interruptAt = time.Now()
-			// }
-			// t.session.Unlock()
 
 			// Pre-confirmation check
 			if t.Confirm != nil && !t.tryTimeout(false) {
@@ -309,7 +300,6 @@ func (t *Timeout) resetLocked() {
 		<-t.reset
 		t.reset <- t.lastExtension
 	}
-	t.busyExtension = 0
 }
 
 func (t *Timeout) getTimeout(ext time.Duration) (timeout, due time.Duration) {

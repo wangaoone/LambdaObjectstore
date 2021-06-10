@@ -100,9 +100,12 @@ func main() {
 	if !options.NoDashboard {
 		dash = dashboard.NewDashboard()
 		go func() {
-			defer finalize(false)
-			dash.Start()
-			sig <- syscall.SIGINT
+			defer finalize(true)
+			if err := dash.Start(); err == nil {
+				sig <- syscall.SIGINT
+			} else if err != dashboard.ErrClosed {
+				panic(err)
+			}
 		}()
 	}
 
@@ -198,19 +201,34 @@ func finalize(fix bool) {
 		dash = nil
 	}
 
-	// If fixable, try close server normally.
-	if fix {
-		if err := recover(); err != nil {
-			log.Error("%v", err)
-			return
-		}
-	}
-
 	// Rest will be cleared from main routine.
 	if logFile != nil {
 		os.Stderr = stdErr
 		syslog.SetOutput(os.Stdout)
 		logFile.Close()
 		logFile = nil
+	}
+
+	// If fixable, try close server normally.
+	if !fix {
+		return
+	}
+
+	if err := recover(); err != nil {
+		log.Error("%v", err)
+
+		if global.Options.MemProfile != "" {
+			f, err := os.Create(global.Options.MemProfile + "crash")
+			if err != nil {
+				log.Error("could not create memory profile: ", err)
+			}
+			defer f.Close() // error handling omitted for example
+			runtime.GC()    // get up-to-date statistics
+			if err := pprof.WriteHeapProfile(f); err != nil {
+				log.Error("could not write memory profile: ", err)
+			}
+		}
+
+		sig <- syscall.SIGINT
 	}
 }

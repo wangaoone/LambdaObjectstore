@@ -36,7 +36,6 @@ var (
 	ErrInvalidShortcut  = errors.New("invalid shortcut connection")
 	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 
-	MaxAttempts           = 3
 	RetrialDelayStartFrom = 20 * time.Millisecond
 	RetrialMaxDelay       = 10 * time.Second
 )
@@ -61,6 +60,8 @@ type Worker struct {
 
 	// Dynamic connection
 	availableTokens chan *struct{}
+	balance         int32
+	startBalance    int32
 	dataLinks       *list.List
 
 	// Proxies container
@@ -150,27 +151,32 @@ func (wrk *Worker) CloseWithOptions(opts ...bool) {
 		graceful = opts[0]
 	}
 
-	wrk.mu.Lock()
-	defer wrk.mu.Unlock()
-
-	if graceful && atomic.CompareAndSwapInt32(&wrk.closed, WorkerRunning, WorkerClosing) {
-		// Graceful close is requested, wait for close.
-		wrk.readyToClose.Wait()
-		atomic.StoreInt32(&wrk.closed, WorkerClosed)
-	} else if !atomic.CompareAndSwapInt32(&wrk.closed, WorkerRunning, WorkerClosed) {
-		// Closing or closed
+	if !atomic.CompareAndSwapInt32(&wrk.closed, WorkerRunning, WorkerClosing) {
 		return
 	}
+	if graceful {
+		// Graceful close is requested, wait for close.
+		wrk.readyToClose.Wait()
+	}
 
+	wrk.mu.Lock()
+
+	atomic.StoreInt32(&wrk.closed, WorkerClosed)
 	wrk.ctrlLink.Close()
 	wrk.clearDataLinksLocked()
 	atomic.StoreInt32(&wrk.numLinks, 0)
+
+	wrk.mu.Unlock()
 
 	wrk.readyToClose.Wait()
 	wrk.log.Info("Closed")
 }
 
 func (wrk *Worker) IsClosed() bool {
+	if wrk.isClosedLocked() {
+		return true
+	}
+
 	wrk.mu.RLock()
 	defer wrk.mu.RUnlock()
 
@@ -178,7 +184,7 @@ func (wrk *Worker) IsClosed() bool {
 }
 
 func (wrk *Worker) isClosedLocked() bool {
-	return atomic.LoadInt32(&wrk.closed) == WorkerClosed
+	return atomic.LoadInt32(&wrk.closed) != WorkerRunning
 }
 
 func (wrk *Worker) Handler(fn redeo.HandlerFunc) redeo.HandlerFunc {
@@ -203,18 +209,14 @@ func (wrk *Worker) AddResponses(rsp Response, links ...interface{}) (err error) 
 		return nil
 	}
 
-	wrk.mu.RLock()
-
+	// It's no harm to call locked version
 	if wrk.isClosedLocked() {
-		wrk.mu.RUnlock()
 		rsp.abandon(ErrWorkerClosed)
 		return ErrWorkerClosed
 	}
 
 	// Select link to use by parameter.
 	link := wrk.selectLink(links...)
-
-	wrk.mu.RUnlock()
 
 	// Link will only be binded once. We use binded link to add the response.
 	rsp.bind(link)
@@ -289,16 +291,13 @@ func (wrk *Worker) serve(link *Link, proxyAddr net.Addr, opts *WorkerOptions, st
 
 		wrk.log.Info("Connection(%v) to %v established.", link.ID(), remoteAddr)
 
-		wrk.mu.Lock()
 		// Recheck if server closed in mutex
-		if atomic.LoadInt32(&wrk.closed) == WorkerClosed {
+		if wrk.IsClosed() {
 			conn.Close()
-			wrk.mu.Unlock()
 			wrk.readyToClose.Done()
 			return
 		}
 		link.Reset(conn)
-		wrk.mu.Unlock()
 
 		// Send a heartbeat on the link immediately to confirm store information.
 		// The heartbeat will be queued and send once worker started.
@@ -355,12 +354,13 @@ func (wrk *Worker) reserveConnection(links *list.List, proxyAddr net.Addr, opts 
 	for i := 0; i < opts.MinDataLinks; i++ {
 		wrk.availableTokens <- &struct{}{}
 	}
+	wrk.balance = int32(len(wrk.availableTokens))
+	wrk.startBalance = wrk.balance
 	ch := wrk.availableTokens
 	for token := range ch {
-		link := NewLink(false)
-		link.id = int(atomic.AddInt32(&wrk.numLinks, 1))
-		link.GrantToken(token)
-		if err := wrk.serveOnce(link, proxyAddr, opts); err != nil {
+		if link := wrk.reserveDataLink(nil, token); link == nil {
+			continue
+		} else if err := wrk.serveOnce(link, proxyAddr, opts); err != nil {
 			// Failed to connect, exit.
 			break
 		} else {
@@ -397,15 +397,12 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions
 	}
 	wrk.log.Info("Connection(%v) to %v established.", link.ID(), remoteAddr)
 
-	wrk.mu.Lock()
 	// Recheck if server closed in mutex
-	if atomic.LoadInt32(&wrk.closed) == WorkerClosed {
+	if wrk.IsClosed() {
 		conn.Close()
-		wrk.mu.Unlock()
 		return ErrWorkerClosed
 	}
 	link.Reset(conn)
-	wrk.mu.Unlock()
 
 	// Send a heartbeat on the link immediately to confirm store information.
 	// The heartbeat will be queued and send once worker started.
@@ -428,18 +425,49 @@ func (wrk *Worker) serveOnce(link *Link, proxyAddr net.Addr, opts *WorkerOptions
 	return nil
 }
 
+func (wrk *Worker) reserveDataLink(link *Link, token *struct{}) *Link {
+	balance := atomic.AddInt32(&wrk.balance, -1)
+	defer wrk.log.Debug("Link available, spare links: %d", wrk.startBalance-balance)
+
+	// We will not create new link if there are spare links
+	if balance < 0 && link == nil {
+		return link
+	}
+
+	if link == nil {
+		link = NewLink(false)
+		link.id = int(atomic.AddInt32(&wrk.numLinks, 1))
+	}
+	if token == nil {
+		token = &struct{}{}
+	}
+	link.GrantToken(token)
+	return link
+}
+
 func (wrk *Worker) flagReservationUsed(link *Link) bool {
 	token := link.RevokeToken()
 	if token == nil {
 		return false
 	}
 
-	wrk.mu.Lock()
-	if wrk.availableTokens != nil {
-		wrk.log.Debug("Token recycled.")
-		wrk.availableTokens <- token
+	availableTokens := wrk.availableTokens
+	if availableTokens == nil {
+		return false
 	}
-	wrk.mu.Unlock()
+
+	if balance := atomic.AddInt32(&wrk.balance, 1); balance > 0 {
+		select {
+		case wrk.availableTokens <- token:
+			wrk.log.Debug("Token recycled, spare links: %d", wrk.startBalance-balance)
+		default:
+			wrk.log.Warn("Token overflowed(balance: %d), reset balance.", balance)
+			// TODO: This is a dangrous reset. However, program should not reach here, we'll debug this once we see the warning.
+			atomic.StoreInt32(&wrk.balance, int32(len(wrk.availableTokens)))
+		}
+	} else {
+		wrk.log.Debug("Link consumed, spare links: %d", wrk.startBalance-balance)
+	}
 	runtime.Gosched() // Encourage create another connection quickly.
 	return true
 }
@@ -449,7 +477,11 @@ func (wrk *Worker) acknowledge(link *Link) {
 }
 
 func (wrk *Worker) ackHandler(w resp.ResponseWriter, c *resp.Command) {
-	wrk.acknowledge(LinkFromClient(redeo.GetClient(c.Context())))
+	link := LinkFromClient(redeo.GetClient(c.Context()))
+	wrk.acknowledge(link)
+	if !link.IsControl() {
+		wrk.reserveDataLink(link, nil)
+	}
 }
 
 func (wrk *Worker) WaitAck(cmd string, cb func(), links ...interface{}) {
@@ -470,7 +502,7 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 	link := LinkFromClient(redeo.GetClient(rsp.Context()))
 
 	if wrk.IsClosed() {
-		wrk.log.Warn("Abort flushing response(%s): %v", rsp.Command(), ErrWorkerClosed)
+		wrk.log.Warn("Abort flushing response(%v): %v", rsp, ErrWorkerClosed)
 		rsp.abandon(ErrWorkerClosed)
 		return
 	}
@@ -480,26 +512,26 @@ func (wrk *Worker) responseHandler(w resp.ResponseWriter, r interface{}) {
 		wrk.SetFailure(link, err)
 
 		if wrk.IsClosed() {
-			wrk.log.Warn("Error on flush response(%s), abandon attempts because the worker is closed: %v", rsp.Command(), ErrWorkerClosed)
+			wrk.log.Warn("Error on flush response(%v), abandon attempts because the worker is closed: %v", rsp, ErrWorkerClosed)
 			rsp.close()
 			return
 		} else if link.IsClosed() {
-			wrk.log.Warn("Error on flush response(%s), abandon attempts because the link is closed: %v", rsp.Command(), ErrLinkClosed)
+			wrk.log.Warn("Error on flush response(%v), abandon attempts because the link is closed: %v", rsp, ErrLinkClosed)
 			rsp.close()
 			return
 		}
 
 		left := rsp.markAttempt()
-		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(MaxAttempts-left-1)))
+		retryIn := RetrialDelayStartFrom * time.Duration(math.Pow(float64(RetrialBackoffFactor), float64(rsp.maxAttempts()-left-1)))
 		if left > 0 {
-			wrk.log.Warn("Error on flush response(%s), retry in %v: %v", rsp.Command(), retryIn, err)
+			wrk.log.Warn("Error on flush response(%v), retry in %v: %v", rsp, retryIn, err)
 			go func() {
 				time.Sleep(retryIn)
 				wrk.AddResponses(rsp)
 			}()
 			return
 		} else {
-			wrk.log.Warn("Error on flush response(%s), abandon attempts: %v", rsp.Command(), err)
+			wrk.log.Warn("Error on flush response(%v), abandon attempts: %v", rsp, err)
 		}
 
 		rsp.close()
