@@ -3,10 +3,10 @@
 BASE=`pwd`/`dirname $0`
 PREFIX="CacheNode"
 KEY="lambda"
-cluster=400
+cluster=200
 mem=1024
 
-S3="mason-leap-lab.infinicache"
+S3="mason-leap-lab.infinistore"
 
 if [ "$2" != "" ] ; then
   PREFIX="$2"

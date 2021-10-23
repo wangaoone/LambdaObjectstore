@@ -16,7 +16,7 @@ import (
 const (
 
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
-	ROLE = "arn:aws:iam::037862857942:role/Proxy1"
+	ROLE = "arn:aws:iam::590178426343:role/infinistore-lambda-role"
 	// AWS region, change it if necessary.
 	REGION = "us-east-1"
 )
@@ -36,12 +36,11 @@ var (
 	bucket  = flag.String("S3", "ao.lambda.code", "S3 bucket for lambda code")
 
 	subnet = []*string{
-		aws.String("subnet-eeb536c0"),
-		//aws.String("subnet-f94739f6"),
-		aws.String("subnet-f432faca"),
+		aws.String("subnet-00bc3109073cf8e63"),
+		aws.String("subnet-06044603be8c326d7"),
 	}
 	securityGroup = []*string{
-		aws.String("sg-0281863209f428cb2"), aws.String("sg-d5b37d99"),
+		aws.String("sg-0d529cf21a0a53cbd"),
 	}
 )
 
