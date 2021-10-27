@@ -44,9 +44,10 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 			break
 		}
 	}
+	// Add place holder only if there are other proxies
 	if included < 0 && len(addresses) > 0 {
 		included = len(addresses)
-		addresses = append(addresses, "address template")
+		addresses = append(addresses, "place holder")
 	}
 
 	adapter := &RedisAdapter{
@@ -133,11 +134,13 @@ func (a *RedisAdapter) getClient(redeoClient *redeo.Client) *infinicache.Client 
 		}
 
 		client := infinicache.NewClient(a.d, a.p, ECMaxGoroutine)
-		client.Dial(addresses)
 		shortcut.Client = client
 		shortcut.OnValidate = func(mock *net.MockConn) {
 			go a.server.ServeForeignClient(mock.Server, false)
 		}
+		// Dial after shortcut set up
+		client.Dial(addresses)
+
 		go func() {
 			redeoClient.WaitClose()
 			client.Close()
