@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
 	"github.com/mason-leap-lab/infinicache/client"
 )
 
