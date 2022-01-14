@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -24,14 +25,19 @@ var (
 	FunctionPrefixMatcher = regexp.MustCompile(`\d+$`)
 
 	ContextKeyLog = "log"
+
+	ErrOOStorage = errors.New("out of storage")
 )
 
 type StorageHelper interface {
 	get(string) (*types.Chunk, bool)
-	getWithOption(string, *types.OpWrapper) (string, []byte, *types.OpRet)
+	getWithOption(string, *types.OpWrapper) (*types.Chunk, *types.OpRet)
 	set(string, *types.Chunk)
-	setWithOption(string, string, []byte, *types.OpWrapper) *types.OpRet
+	setWithOption(string, *types.Chunk, *types.OpWrapper) *types.OpRet
+	del(*types.Chunk, string)
+	delWithOption(*types.Chunk, string, *types.OpWrapper) *types.OpRet
 	newChunk(string, string, uint64, []byte) *types.Chunk
+	validate(*types.Chunk, *types.OpWrapper) (*types.OpWrapper, bool)
 }
 
 // Storage with lineage
@@ -81,49 +87,61 @@ func (s *Storage) get(key string) (*types.Chunk, bool) {
 	}
 }
 
-func (s *Storage) getWithOption(key string, opt *types.OpWrapper) (string, []byte, *types.OpRet) {
+func (s *Storage) getWithOption(key string, opt *types.OpWrapper) (*types.Chunk, *types.OpRet) {
 	chunk, ok := s.helper.get(key)
 	if !ok {
 		// No entry
-		return "", nil, types.OpError(types.ErrNotFound)
+		return nil, types.OpError(types.ErrNotFound)
 	}
 
-	val := chunk.Access()
+	if opt == nil || !opt.Accessed {
+		chunk.Access()
+	}
 	if chunk.IsDeleted() {
-		return chunk.Id, nil, types.OpError(types.ErrDeleted)
+		return nil, types.OpErrorWithMessage(types.ErrDeleted, chunk.Note)
 	} else {
 		// Ensure val is available regardless chunk is deleted or not.
-		return chunk.Id, val, types.OpSuccess()
+		return chunk, types.OpSuccess()
 	}
 }
 
 // Storage Implementation
 func (s *Storage) Get(key string) (string, []byte, *types.OpRet) {
-	return s.helper.getWithOption(key, nil)
+	chunk, ret := s.helper.getWithOption(key, nil)
+	if ret.Error() != nil {
+		return "", nil, ret
+	}
+
+	return chunk.Id, chunk.Body, types.OpSuccess()
 }
 
 func (s *Storage) GetStream(key string) (string, resp.AllReadCloser, *types.OpRet) {
-	chunkId, val, ret := s.helper.getWithOption(key, nil)
+	chunk, ret := s.helper.getWithOption(key, nil)
 	if ret.Error() != nil {
-		return chunkId, nil, ret
+		return "", nil, ret
 	}
 
-	return chunkId, resp.NewInlineReader(val), types.OpSuccess()
+	return chunk.Id, resp.NewInlineReader(chunk.Body), types.OpSuccess()
 }
 
 func (s *Storage) set(key string, chunk *types.Chunk) {
-	ck, ok := s.repo.Get(key)
 	s.repo.Set(key, chunk)
-	if ok {
-		s.meta.IncreaseSize(chunk.Size - ck.(*types.Chunk).Size)
-	} else {
-		s.meta.IncreaseSize(chunk.Size)
-	}
 }
 
-func (s *Storage) setWithOption(key string, chunkId string, val []byte, opt *types.OpWrapper) *types.OpRet {
-	chunk := s.helper.newChunk(key, chunkId, uint64(len(val)), val)
+func (s *Storage) setWithOption(key string, chunk *types.Chunk, opt *types.OpWrapper) *types.OpRet {
+	ck, ok := s.repo.Get(key)
 	s.helper.set(key, chunk)
+	change := uint64(0)
+	if ok {
+		change -= ck.(*types.Chunk).Size
+	}
+	if opt == nil || !opt.Sized {
+		change += chunk.Size
+	}
+	if change > 0 {
+		s.meta.IncreaseSize(change)
+	}
+
 	return types.OpSuccess()
 }
 
@@ -131,9 +149,14 @@ func (s *Storage) newChunk(key string, chunkId string, size uint64, val []byte) 
 	return types.NewChunk(key, chunkId, val)
 }
 
+func (s *Storage) validate(_ *types.Chunk, opt *types.OpWrapper) (*types.OpWrapper, bool) {
+	return opt, true
+}
+
 // Set chunk
 func (s *Storage) Set(key string, chunkId string, val []byte) *types.OpRet {
-	return s.helper.setWithOption(key, chunkId, val, nil)
+	chunk := s.helper.newChunk(key, chunkId, uint64(len(val)), val)
+	return s.helper.setWithOption(key, chunk, nil)
 }
 
 // Set chunk using stream
@@ -143,20 +166,31 @@ func (s *Storage) SetStream(key string, chunkId string, valReader resp.AllReadCl
 		return types.OpError(fmt.Errorf("error on read stream: %v", err))
 	}
 
-	return s.helper.setWithOption(key, chunkId, val, nil)
+	return s.Set(key, chunkId, val)
 }
 
-func (s *Storage) Del(key string, chunkId string) *types.OpRet {
+func (s *Storage) del(chunk *types.Chunk, reason string) {
+	chunk.Delete(reason)
+}
+
+func (s *Storage) delWithOption(chunk *types.Chunk, reason string, opt *types.OpWrapper) *types.OpRet {
+	if opt == nil || !opt.Accessed {
+		chunk.Access()
+	}
+	s.helper.del(chunk, reason)
+	if opt == nil || !opt.Sized {
+		s.meta.DecreaseSize(chunk.Size)
+	}
+	return types.OpSuccess()
+}
+
+func (s *Storage) Del(key string, reason string) *types.OpRet {
 	chunk, ok := s.helper.get(key)
 	if !ok {
 		return types.OpError(types.ErrNotFound)
 	}
 
-	chunk.Access()
-	chunk.Delete()
-	s.meta.DecreaseSize(chunk.Size)
-
-	return types.OpSuccess()
+	return s.helper.delWithOption(chunk, reason, nil)
 }
 
 func (s *Storage) Len() int {

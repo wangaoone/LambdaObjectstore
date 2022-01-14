@@ -25,6 +25,7 @@ type StorageMeta struct {
 	size     uint64  // Size of objects stored.
 	bakSize  uint64  // Size of backup objects stored.
 	memStat  runtime.MemStats
+	modifier types.StorageMeta
 }
 
 func (m *StorageMeta) Capacity() uint64 {
@@ -47,7 +48,15 @@ func (m *StorageMeta) Reserved() uint64 {
 	return m.Rsrved
 }
 
+func (m *StorageMeta) ModifiedSize() uint64 {
+	if m.modifier == nil {
+		return m.Size()
+	}
+	return m.Size() - m.modifier.Size()
+}
+
 func (m *StorageMeta) Size() uint64 {
+
 	return atomic.LoadUint64(&m.size)
 }
 
@@ -66,7 +75,7 @@ func (m *StorageMeta) DecreaseSize(dec uint64) uint64 {
 func (m *StorageMeta) Calibrate() {
 	runtime.GC()
 	runtime.ReadMemStats(&m.memStat)
-	overhead := float64(m.memStat.Sys - m.size)
+	overhead := float64(m.memStat.Sys - m.Size() - m.bakSize)
 	if overhead > m.overhead {
 		m.overhead = overhead*CalibrateFactor + m.overhead*(1-CalibrateFactor)
 	} else {

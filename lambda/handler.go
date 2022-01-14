@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -181,9 +182,14 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 				return Lineage.Status().ProtocolStatus(), err
 			} else if !consistent {
 				if input.IsBackingOnly() && i == 0 {
+					// if i == 0 {
 					// In backing only mode, we will not try to recover main repository.
 					// And any data loss will be regarded as signs of reclaimation.
 					flags |= protocol.PONG_RECLAIMED
+					if metas[i].ServingKey() != "" {
+						// Invalidate extended timeout.
+						session.Timeout.ResetWithExtension(lambdaLife.TICK_ERROR, input.Cmd)
+					}
 				} else {
 					inconsistency++
 				}
@@ -251,24 +257,24 @@ func HandleRequest(ctx context.Context, input protocol.InputEvent) (protocol.Sta
 
 	// Adaptive timeout control
 	log.Debug("Waiting for timeout...")
-	meta := wait(session, Lifetime).ProtocolStatus()
+	status := wait(session, Lifetime)
 
-	Server.Pause()
+	if DRY_RUN {
+		Server.Close()
+	} else {
+		Server.Pause()
+	}
+	meta := finalize(status)
 	log.Debug("Output meta: %v", meta)
 	if IsDebug() {
 		log.Debug("All go routing cleared(%d)", runtime.NumGoroutine())
 	}
-	gcStart := time.Now()
-	// Optimize memory usage and return statistics
-	storeMeta := Store.Meta()
-	storeMeta.Calibrate()
-	meta.Capacity = storeMeta.Capacity()
-	meta.Mem = storeMeta.Effective()
-	log.Debug("GC takes %v", time.Since(gcStart))
 	log.Debug("Function returns at %v, interrupted: %v", session.Timeout.Since(), session.Timeout.Interrupted())
-	log.Info("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB", session.Timeout.Since(), session.Timeout.Interrupted(),
-		float64(storeMeta.Effective())/1000000, float64(storeMeta.System())/1000000, float64(storeMeta.Waterline())/1000000)
-	return meta, nil
+	log.Debug("served: %d, interrupted: %d, effective: %.2f MB, mem: %.2f MB, max: %.2f MB, stored: %.2f MB, backed: %.2f MB",
+		session.Timeout.Since(), session.Timeout.Interrupted(),
+		float64(Store.Meta().Effective())/1000000, float64(Store.Meta().System())/1000000, float64(Store.Meta().Waterline())/1000000,
+		float64(Store.Meta().Size())/1000000, float64(Store.Meta().(*storage.StorageMeta).BackupSize())/1000000)
+	return *meta, nil
 }
 
 func waitForRecovery(chs ...<-chan error) {
@@ -294,11 +300,11 @@ func waitForRecovery(chs ...<-chan error) {
 func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status types.LineageStatus) {
 	defer session.CleanUp.Wait()
 
-	var commitOpt *types.CommitOption
 	if Lineage != nil {
 		session.Timeout.Confirm = func(timeout *lambdaLife.Timeout) bool {
 			// Commit and wait, error will be logged.
-			commitOpt, _ = Lineage.Commit()
+			// Confirming will not block further operations. Don't stop tracking.
+			Lineage.Commit()
 			return true
 		}
 	}
@@ -316,38 +322,40 @@ func wait(session *lambdaLife.Session, lifetime *lambdaLife.Lifetime) (status ty
 		// There's no turning back.
 		session.Timeout.Halt()
 
-		if Lifetime.IsTimeUp() && Store.Len() > 0 {
-			// Time to migrate
-			// Check of number of keys in store is necessary. As soon as there is any value
-			// in the store and time up, we should start migration.
+		// Migration should be reviewed
+		// if Lifetime.IsTimeUp() && Store.Len() > 0 {
+		// 	// Time to migrate
+		// 	// Check of number of keys in store is necessary. As soon as there is any value
+		// 	// in the store and time up, we should start migration.
 
-			// Initiate migration
-			session.Migrator = migrator.NewClient()
-			log.Info("Initiate migration.")
-			initiator := func() error { return initMigrateHandler() }
-			for err := session.Migrator.Initiate(initiator); err != nil; {
-				log.Warn("Fail to initiaiate migration: %v", err)
-				if err == types.ErrProxyClosing {
-					return
-				}
+		// 	// Initiate migration
+		// 	session.Migrator = migrator.NewClient()
+		// 	log.Info("Initiate migration.")
+		// 	initiator := func() error { return initMigrateHandler() }
+		// 	for err := session.Migrator.Initiate(initiator); err != nil; {
+		// 		log.Warn("Fail to initiaiate migration: %v", err)
+		// 		if err == types.ErrProxyClosing {
+		// 			return
+		// 		}
 
-				log.Warn("Retry migration")
-				err = session.Migrator.Initiate(initiator)
-			}
-			log.Debug("Migration initiated.")
-		} else {
-			// Finalize, this is quick usually.
-			if Lineage == nil && Persist != nil {
-				Persist.StopTracker(commitOpt)
-			}
-			if Lineage != nil {
-				status = Lineage.Status()
-			}
-			byeHandler()
-			session.Done()
-			log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
-			return
+		// 		log.Warn("Retry migration")
+		// 		err = session.Migrator.Initiate(initiator)
+		// 	}
+		// 	log.Debug("Migration initiated.")
+		// } else {
+
+		// Finalize. Stop tracker after timeout is triggered and irreversable.
+		// This is quick usually.
+		if Persist != nil {
+			Persist.StopTracker()
 		}
+		if Lineage != nil {
+			status = Lineage.Status()
+		}
+		byeHandler(session, status)
+		session.Done()
+		log.Debug("Lambda timeout, return(%v).", session.Timeout.Since())
+		// }
 	}
 
 	return
@@ -491,23 +499,45 @@ func migrateHandler(input *protocol.InputEvent, session *lambdaLife.Session) boo
 	return true
 }
 
-func initMigrateHandler() error {
-	// init backup cmd
-	rsp, _ := Server.AddResponsesWithPreparer("initMigrate", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
-		w.AppendBulkString(rsp.Cmd)
-	})
-	return rsp.Flush()
-}
+// func initMigrateHandler() error {
+// 	// init backup cmd
+// 	rsp, _ := Server.AddResponsesWithPreparer("initMigrate", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+// 		w.AppendBulkString(rsp.Cmd)
+// 	})
+// 	return rsp.Flush()
+// }
 
-func byeHandler() error {
+func byeHandler(session *lambdaLife.Session, status types.LineageStatus) error {
 	// init backup cmd
-	// rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
-	// 	w.AppendBulkString(rsp.Cmd)
-	// })
-	// return rsp.Flush()
+	if DRY_RUN {
+		meta := finalize(status)
+		rsp, _ := Server.AddResponsesWithPreparer("bye", func(rsp *worker.SimpleResponse, w resp.ResponseWriter) {
+			w.AppendBulkString(rsp.Cmd)
+			w.AppendBulkString(session.Sid)
+			out, _ := json.Marshal(meta)
+			w.AppendBulk(out)
+		})
+		return rsp.Flush()
+	}
 
 	// Disable
 	return nil
+}
+
+func finalize(status types.LineageStatus) *protocol.Status {
+	meta := status.ProtocolStatus()
+
+	gcStart := time.Now()
+	// Optimize memory usage and return statistics
+	storeMeta := Store.Meta()
+	storeMeta.Calibrate()
+	log.Debug("GC takes %v", time.Since(gcStart))
+	meta.Capacity = storeMeta.Capacity()
+	meta.Mem = storeMeta.Waterline()
+	meta.Effective = storeMeta.Effective()
+	meta.Modified = storeMeta.Size()
+
+	return &meta
 }
 
 func main() {
@@ -530,7 +560,7 @@ func main() {
 
 		var input protocol.InputEvent
 		input.Sid = "dummysid"
-		input.Status = protocol.Status{Metas: make([]protocol.Meta, 1, 2)}
+		input.Status = protocol.Status{Metas: make([]protocol.Meta, 1, 3)}
 		// input.Status = append(input.Status, protocol.Meta{
 		// 	1, 2, 203, 10, "ce4d34a28b9ad449a4113d37469fc517741e6b244537ed60fa5270381df3f083", 0, 0, 0, "",
 		// })
@@ -549,6 +579,9 @@ func main() {
 		flag.Uint64Var(&input.Status.Metas[0].SnapshotUpdates, "snapshotupdates", 0, "Snapshot.Updates")
 		flag.Uint64Var(&input.Status.Metas[0].SnapshotSize, "snapshotsize", 0, "Snapshot.Size")
 		flag.StringVar(&input.Status.Metas[len(input.Status.Metas)-1].Tip, "tip", "", "Tips in http query format: bak=1&baks=10")
+
+		// More meta
+		strMetas := flag.String("metas", "", "Extra metas")
 
 		// More args
 		timeout := flag.Int("timeout", 900, "Execution timeout")
@@ -591,6 +624,12 @@ func main() {
 		tips, err := url.ParseQuery(input.Status.Metas[len(input.Status.Metas)-1].Tip)
 		if err != nil {
 			log.Warn("Invalid tips(%s) in protocol meta: %v", input.Status.Metas[len(input.Status.Metas)-1].Tip, err)
+		}
+
+		var metas []protocol.Meta
+		json.Unmarshal([]byte(*strMetas), &metas)
+		if len(metas) > 0 {
+			input.Status.Metas = append(input.Status.Metas, metas...)
 		}
 
 		var payload *protocol.Meta
@@ -1058,7 +1097,7 @@ func main() {
 
 					start := time.Now()
 					lambdacontext.FunctionName = fmt.Sprintf("node%d", input.Id)
-					log.Info("Start dummy node: %s", lambdacontext.FunctionName)
+					log.Info("Start dummy node: %s, sid: %s", lambdacontext.FunctionName, input.Sid)
 					output, err := HandleRequest(ctx, *input)
 					if err != nil {
 						log.Error("Error: %v", err)
