@@ -1,4 +1,5 @@
 #!/bin/bash
+
 BASE=`pwd`/`dirname $0`
 PREFIX="CacheNode"
 KEY="lambda"
@@ -30,7 +31,7 @@ if [ "$CODE" == "-code" ] ; then
     echo "Compressing file..."
     zip $KEY $KEY
     echo "Putting code zip to s3"
-    ${AWSPATH}aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
+    aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 else 
     echo -e "Updating "$EMPH"configuration"$RESET" of Lambda deployments ${PREFIX}${start} to ${PREFIX}$((start+cluster)) to $mem MB, $1s timeout..."
     read -p "Press any key to confirm, or ctrl-C to stop."
