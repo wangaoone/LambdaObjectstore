@@ -3,19 +3,11 @@ BASE=`pwd`/`dirname $0`
 PREFIX="Store1VPCNode"
 KEY="lambda"
 start=0
-<<<<<<< HEAD
-cluster=200
-mem=1024
-# try -code
-
-S3="mason-leap-lab.infinistore"
-=======
 cluster=1000
 mem=1024
 # try -code
 
 S3="tianium.default"
->>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
 EMPH="\033[1;33m"
 RESET="\033[0m"
 
