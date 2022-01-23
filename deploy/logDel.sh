@@ -1,8 +1,8 @@
 # deleting log in cloudWatch with prefix
 #!/bin/bash
 
-PREFIX="Store1VPCNode"
+prefix=$1
 
-for ((i = 0; i <= $1; i++)); do
-    aws logs delete-log-group --log-group-name /aws/lambda/$PREFIX$i
+for ((i = 0; i <= $2; i++)); do
+    aws logs delete-log-group --log-group-name /aws/lambda/$prefix$i
 done

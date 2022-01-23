@@ -3,8 +3,6 @@ package dashboard
 import (
 	"errors"
 	"log"
-	"os"
-	"runtime/pprof"
 	"time"
 
 	ui "github.com/gizak/termui/v3"
@@ -108,14 +106,6 @@ func (dash *Dashboard) Start() error {
 				return nil
 			case "m":
 				dash.icMode = (dash.icMode + 1) % types.InstanceOccupancyMod
-			case "p":
-				if global.Options.MemProfile != "" {
-					f, err := os.Create(global.Options.MemProfile + "_dash")
-					if err == nil {
-						defer f.Close() // error handling omitted for example
-						pprof.WriteHeapProfile(f)
-					}
-				}
 			case "<Resize>":
 				payload := e.Payload.(ui.Resize)
 				dash.SetRect(0, 0, payload.Width, payload.Height)

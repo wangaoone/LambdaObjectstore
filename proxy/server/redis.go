@@ -65,29 +65,18 @@ func NewRedisAdapter(srv *redeo.Server, proxy *Proxy, d int, p int) *RedisAdapte
 		},
 	}
 
-	srv.HandleStreamFunc(protocol.CMD_SET, adapter.handleSet)
+	srv.HandleFunc(protocol.CMD_SET, adapter.handleSet)
 	srv.HandleFunc(protocol.CMD_GET, adapter.handleGet)
 
 	return adapter
 }
 
 // from client
-func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.CommandStream) {
+func (a *RedisAdapter) handleSet(w resp.ResponseWriter, c *resp.Command) {
 	client := a.getClient(redeo.GetClient(c.Context()))
 
-	key, _ := c.NextArg().String()
-	bodyReader, err := c.Next()
-	if err != nil {
-		w.AppendError(err.Error())
-		w.Flush()
-		return
-	}
-	body, err := bodyReader.ReadAll()
-	if err != nil {
-		w.AppendError(err.Error())
-		w.Flush()
-		return
-	}
+	key := c.Arg(0).String()
+	body := c.Arg(1).Bytes()
 
 	t := time.Now()
 	_, ok := client.EcSet(key, body)

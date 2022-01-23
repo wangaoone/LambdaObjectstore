@@ -3,9 +3,7 @@ package views
 import (
 	"fmt"
 	"image"
-	"os"
 	"runtime"
-	"runtime/pprof"
 
 	"github.com/dustin/go-humanize"
 	ui "github.com/gizak/termui/v3"
@@ -15,12 +13,8 @@ import (
 	"github.com/mason-leap-lab/infinicache/proxy/types"
 )
 
-const (
-	GB = 1073741824
-)
-
 var (
-	MemLimit = uint64(10) * GB
+	MemLimit = uint64(0)
 )
 
 type StatusView struct {
@@ -69,12 +63,5 @@ func (v *StatusView) Draw(buf *ui.Buffer) {
 			runtime.Gosched()
 			dash.Quit(fmt.Sprintf("Memory OOM alert: HeapAlloc beyond %s(%s)", humanize.Bytes(MemLimit), humanize.Bytes(v.maxMemory)))
 		}(v.dash)
-		if global.Options.MemProfile != "" {
-			f, err := os.Create(global.Options.MemProfile + "_status")
-			if err == nil {
-				defer f.Close() // error handling omitted for example
-				pprof.WriteHeapProfile(f)
-			}
-		}
 	}
 }

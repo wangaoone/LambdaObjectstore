@@ -7,7 +7,7 @@ fi
 PWD=`dirname $0`
 ENTRY=`date "+%Y%m%d%H%M"`
 ENTRY="/data/$ENTRY"
-NODE_PREFIX="Store1VPCNode"
+NODE_PREFIX="Proxy1Node"
 
 source $PWD/util.sh
 

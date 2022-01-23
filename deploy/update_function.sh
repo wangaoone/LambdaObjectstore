@@ -1,13 +1,14 @@
 #!/bin/bash
+
 BASE=`pwd`/`dirname $0`
-PREFIX="Store1VPCNode"
+PREFIX="CacheNode"
 KEY="lambda"
 start=0
-cluster=1000
+cluster=200
 mem=1024
 # try -code
 
-S3="tianium.default"
+S3="mason-leap-lab.infinistore"
 EMPH="\033[1;33m"
 RESET="\033[0m"
 
@@ -30,7 +31,7 @@ if [ "$CODE" == "-code" ] ; then
     echo "Compressing file..."
     zip $KEY $KEY
     echo "Putting code zip to s3"
-    ${AWSPATH}aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
+    aws s3api put-object --bucket ${S3} --key $KEY.zip --body $KEY.zip
 else 
     echo -e "Updating "$EMPH"configuration"$RESET" of Lambda deployments ${PREFIX}${start} to ${PREFIX}$((start+cluster)) to $mem MB, $1s timeout..."
     read -p "Press any key to confirm, or ctrl-C to stop."

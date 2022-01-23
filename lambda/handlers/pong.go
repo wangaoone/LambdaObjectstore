@@ -16,7 +16,7 @@ import (
 )
 
 var (
-	DefaultPongTimeout = 500 * time.Millisecond
+	DefaultPongTimeout = 50 * time.Millisecond
 	DefaultAttempts    = 0 // Disable retrial for backend link intergrated retrial and reconnection.
 	NoTimeout          = false
 

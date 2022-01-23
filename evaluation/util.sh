@@ -10,6 +10,7 @@ function update_lambda_timeout() {
     NAME=$1
     TIME=$2
     echo "updating lambda store timeout"
+#    for i in {0..13}
     for i in {0..63}
     do
 #            aws lambda update-function-code --function-name $prefix$i --zip-file fileb://Lambda2SmallJPG.zip
@@ -24,6 +25,7 @@ function update_lambda_mem() {
     NAME=$1
     MEM=$2
     echo "updating lambda store mem"
+#    for i in {0..13}
     for i in {0..63}
     do
 #            aws lambda update-function-code --function-name $prefix$i --zip-file fileb://Lambda2SmallJPG.zip
