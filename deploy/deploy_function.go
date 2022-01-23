@@ -16,11 +16,7 @@ import (
 const (
 
 	// ARN of your AWS role, which has the proper policy (AWSLambdaFullAccess is recommended, see README.md for details).
-<<<<<<< HEAD
-	ROLE = "arn:aws:iam::590178426343:role/infinistore-lambda-role"
-=======
 	ROLE = "arn:aws:iam::022127035044:role/lambda-store"
->>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
 	// AWS region, change it if necessary.
 	REGION = "us-east-1"
 )
