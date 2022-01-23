@@ -4,13 +4,21 @@
     {
       "Action": "s3:GetBucketAcl",
       "Effect": "Allow",
+<<<<<<< HEAD
       "Resource": "arn:aws:s3:::mason-leap-lab.infinistore.collector",
+=======
+      "Resource": "arn:aws:s3:::tianium.default",
+>>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
       "Principal": { "Service": "logs.us-east-1.amazonaws.com" }
     },
     {
       "Action": "s3:PutObject" ,
       "Effect": "Allow",
+<<<<<<< HEAD
       "Resource": "arn:aws:s3:::mason-leap-lab.infinistore.collector/*",
+=======
+      "Resource": "arn:aws:s3:::tianium.default/*",
+>>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
       "Condition": { "StringEquals": { "s3:x-amz-acl": "bucket-owner-full-control" } },
       "Principal": { "Service": "logs.us-east-1.amazonaws.com" }
     }

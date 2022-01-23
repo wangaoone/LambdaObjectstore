@@ -5,13 +5,21 @@ import (
 )
 
 // LambdaPrefix Prefix of Lambda function, overridable with command line parameter -lambda-prefix.
+<<<<<<< HEAD
 const LambdaPrefix = "CacheNode"
+=======
+const LambdaPrefix = "Store1VPCNode"
+>>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
 
 // AWSRegion Region of AWS services.
 const AWSRegion = "us-east-1"
 
 // LambdaMaxDeployments Number of Lambda function deployments available.
+<<<<<<< HEAD
 const LambdaMaxDeployments = 200
+=======
+const LambdaMaxDeployments = 1000
+>>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
 
 // Mode of cluster.
 const StaticCluster = "static"
@@ -19,7 +27,7 @@ const WindowCluster = "window"
 const Cluster = WindowCluster
 
 // Size of a slice if the cluster implementation support. Client library use this value to initialize chunk placements.
-const SliceSize = 100
+const SliceSize = 95
 
 // NumLambdaClusters Number of Lambda function deployments initiated on launching.
 // For window cluster, this must be at least D+P
@@ -39,13 +47,17 @@ const InstanceDegradeWarmTimeout = 5 * time.Minute
 const DefaultInstanceCapacity = 1024 * 1000000 // 1GB
 
 // InstanceOverhead Memory reserved for running program on Lambda functions.
+<<<<<<< HEAD
 const InstanceOverhead = 200 * 1000000 // MB
+=======
+const InstanceOverhead = 200 * 1000000 // 200MB
+>>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
 
 // Threshold Scaling out avg instance size threshold
 const Threshold = 0.9 // Don't set beyond 0.9
 
 // Maximum chunk per instance
-const ChunkThreshold = 125000 // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold
+const ChunkThreshold = 8192 // Fraction, ChunkThreshold = InstanceCapacity / 100K * Threshold
 
 // ServerPublicIp Public IP of proxy, leave empty if running Lambda functions in VPC.
 const ServerPublicIp = "" // Leave it empty if Lambda VPC is enabled.
@@ -58,14 +70,14 @@ const RecoverRate = 40 * 1000000 // Not actually used.
 const BackupsPerInstance = 20 // (InstanceCapacity - InstanceOverhead) / RecoverRate
 
 // Each bucket's active duration
-const BucketDuration = 10 // min
+const BucketDuration = 1 // min
 
 // Number of buckets that warmup every InstanceWarmTimeout
-const NumActiveBuckets = 6
+const NumActiveBuckets = 8
 
 // Number of buckets before expiring
 // Buckets beyond NumActiveBuckets but within ExpireBucketsNum will get degraded warmup: InstanceDegradeWarmTimeout
-const NumAvailableBuckets = 18
+const NumAvailableBuckets = 23
 
 // Async migrate control
 const ActiveReplica = 2 //min

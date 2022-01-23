@@ -10,8 +10,13 @@ const (
 )
 
 var (
+<<<<<<< HEAD
 	S3_COLLECTOR_BUCKET string = "mason-leap-lab.infinistore.collector"
 	S3_BACKUP_BUCKET    string = "mason-leap-lab.infinistore.backup%s"
+=======
+	S3_COLLECTOR_BUCKET string = "tianium.default"
+	S3_BACKUP_BUCKET    string = "tianium.infinicache%s"
+>>>>>>> 5ff2a31d554049bca753b6bfdc96fce123104cce
 
 	DRY_RUN = false
 )

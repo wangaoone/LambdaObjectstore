@@ -70,12 +70,13 @@ const (
 	// Abnormal status
 	FAILURE_MAX_QUEUE_REACHED = 1
 
-	MAX_CMD_QUEUE_LEN = 5
-	TEMP_MAP_SIZE     = 10
-	BACKING_DISABLED  = 0
-	BACKING_RESERVED  = 1
-	BACKING_ENABLED   = 2
-	BACKING_FORBID    = 3
+	MAX_CMD_QUEUE_LEN                       = 2
+	ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES = 60
+	TEMP_MAP_SIZE                           = 10
+	BACKING_DISABLED                        = 0
+	BACKING_RESERVED                        = 1
+	BACKING_ENABLED                         = 2
+	BACKING_FORBID                          = 3
 
 	DESCRIPTION_UNSTARTED  = "unstarted"
 	DESCRIPTION_CLOSED     = "closed"
@@ -93,8 +94,8 @@ var (
 	CM                    ClusterManager
 	WarmTimeout           = config.InstanceWarmTimeout
 	TriggerTimeout        = 1 * time.Second // Triggering cost is about 20ms, set large enough to avoid exceeded timeout
-	RTT                   = 2 * time.Millisecond
-	DefaultConnectTimeout = 20 * time.Millisecond // Decide by RTT.
+	RTT                   = 10 * time.Millisecond
+	DefaultConnectTimeout = 200 * time.Millisecond // Decide by RTT.
 	MaxConnectTimeout     = 1 * time.Second
 	MinValidationInterval = 10 * time.Millisecond // MinValidationInterval The minimum interval between validations.
 	MaxValidationFailure  = 3
@@ -173,6 +174,7 @@ type Instance struct {
 	coolTimeout     time.Duration
 	coolReset       chan struct{}
 	numFailure      uint32 // # of continues validation failure, which means to node may stop resonding.
+	numInsFailure   int    // # of continues instance failure.
 	client          invoker.FunctionInvoker
 	lambdaCanceller context.CancelFunc
 
@@ -256,6 +258,12 @@ func (ins *Instance) Status() uint64 {
 	}
 	if len(ins.chanCmd) == MAX_CMD_QUEUE_LEN {
 		failure += FAILURE_MAX_QUEUE_REACHED
+		ins.numInsFailure++
+		if ins.numInsFailure >= ENABLE_DEBUG_AFTER_CONSECUTIVE_FAILURES {
+			global.SetLoggerLevel(logger.LOG_LEVEL_ALL)
+		}
+	} else {
+		ins.numInsFailure = 0
 	}
 	// 0xF000  lifecycle
 	return uint64(atomic.LoadUint32(&ins.status)) +

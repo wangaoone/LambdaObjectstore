@@ -1,6 +1,6 @@
 #!/bin/bash
 
-LAMBDAPREFIX="Function Prefix"
+LAMBDAPREFIX="Store1VPCNode"
 
 PREFIX=$1
 if [ "$PREFIX" == "" ] ; then
