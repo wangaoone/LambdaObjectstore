@@ -8,7 +8,7 @@ cluster=200
 mem=1024
 # try -code
 
-S3="mason-leap-lab.infinistore"
+S3="my-infinistore"
 EMPH="\033[1;33m"
 RESET="\033[0m"
 

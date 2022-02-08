@@ -6,7 +6,7 @@ KEY="lambda"
 cluster=200
 mem=1024
 
-S3="mason-leap-lab.infinistore"
+S3="my-infinistore"
 
 if [ "$2" != "" ] ; then
   PREFIX="$2"
