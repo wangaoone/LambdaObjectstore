@@ -10,9 +10,10 @@ const (
 )
 
 var (
-	S3_COLLECTOR_BUCKET string = "mason-leap-lab.infinistore.collector"
-	S3_BACKUP_BUCKET    string = "mason-leap-lab.infinistore.backup%s"
-
+	//S3_COLLECTOR_BUCKET string = "mason-leap-lab.infinistore.collector"
+	//S3_BACKUP_BUCKET    string = "mason-leap-lab.infinistore.backup%s"
+	S3_COLLECTOR_BUCKET string = "my-infinistore.collector"
+	S3_BACKUP_BUCKET    string = "my-infinistore.backup%s"
 	DRY_RUN = false
 )
 

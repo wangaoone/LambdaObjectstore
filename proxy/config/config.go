@@ -8,7 +8,7 @@ import (
 const LambdaPrefix = "CacheNode"
 
 // AWSRegion Region of AWS services.
-const AWSRegion = "us-east-1"
+const AWSRegion = "us-west-2"
 
 // LambdaMaxDeployments Number of Lambda function deployments available.
 const LambdaMaxDeployments = 200
