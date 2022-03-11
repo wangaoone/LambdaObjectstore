@@ -136,9 +136,28 @@ func (c *Client) EcSet(key string, val []byte, args ...interface{}) (string, boo
 
 // Get New get API. No size is required.
 // Internal error if the bool is set to false
-func (c *Client) Get(key string) (ReadAllCloser, bool) {
+func (c *Client) Get(key string) (ReadAllCloser, error) {
 	_, reader, ok := c.EcGet(key, 0)
-	return reader, ok
+	if !ok {
+		return nil, ErrClient
+	} else if reader == nil {
+		return nil, ErrNotFound
+	} else {
+		return reader, nil
+	}
+}
+
+// Get New get API. No size is required.
+// Internal error if the bool is set to false
+func (c *Client) GetVal(key string) ([]byte, error) {
+	_, reader, ok := c.EcGet(key, 0)
+	if !ok {
+		return nil, ErrClient
+	} else if reader == nil {
+		return nil, ErrNotFound
+	} else {
+		return reader.ReadAll()
+	}
 }
 
 // EcGet Internal API

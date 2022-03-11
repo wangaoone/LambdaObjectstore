@@ -13,3 +13,6 @@ evaluation/data
 log
 *.clog
 evaluation/bin
+pycli/__pycache__
+pycli/example/__pycache__
+*.so
