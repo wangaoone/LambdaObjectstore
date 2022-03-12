@@ -12,6 +12,7 @@ require (
 	github.com/cespare/xxhash v1.1.0
 	github.com/dustin/go-humanize v1.0.0
 	github.com/gizak/termui/v3 v3.1.0
+	github.com/go-python/gopy v0.4.0
 	github.com/google/uuid v1.2.0
 	github.com/jordwest/mock-conn v0.0.0-20180617021051-4896c6bd1641
 	github.com/kelindar/binary v1.0.9
