@@ -92,8 +92,8 @@ test: build-bench
 	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -d 10 -p 2 -op 1
 
 test-redis: build-bench
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -cli redis -op 0
-	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -cli redis -op 1
+	bin/redbench -n 10 -c 1 -keymin 1 -keymax 10 -sz 1000000 -cli redis -op 0
+	bin/redbench -n 100 -c 5 -keymin 1 -keymax 10 -cli redis -op 1
 
 test-local: build-bench
 	bin/redbench -n 1 -c 1 -keymin 1 -keymax 1 -sz 1048576 -d 1 -p 0 -op 0

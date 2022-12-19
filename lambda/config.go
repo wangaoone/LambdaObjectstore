@@ -15,7 +15,7 @@ var (
 	// Bucket to store persistent data. Keep "%s" at the end of the bucket name.
 	S3_BACKUP_BUCKET string = "jzhang33.infinicache%s"
 
-	DRY_RUN = false
+	DRY_RUN = true
 )
 
 func init() {

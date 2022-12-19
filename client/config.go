@@ -11,7 +11,7 @@ var (
 	MaxLambdaStores int = config.SliceSize
 
 	// Timeout The timeout of a single operation
-	Timeout = 1 * time.Second
+	Timeout = 10 * time.Second
 
 	// Timeout The timeout for sending header fields, and reading response headers.
 	HeaderTimeout = 1 * time.Second

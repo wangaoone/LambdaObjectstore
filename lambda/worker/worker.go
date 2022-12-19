@@ -39,7 +39,7 @@ var (
 	ErrInvalidShortcut  = errors.New("invalid shortcut connection")
 	// MaxControlRequestSize = int64(200000) // 200KB, which can be transmitted in 20ms.
 
-	DialTimeout           = 20 * time.Millisecond
+	DialTimeout           = 1000 * time.Millisecond
 	RetrialDelayStartFrom = 100 * time.Millisecond
 	RetrialMaxDelay       = 10 * time.Second
 )
