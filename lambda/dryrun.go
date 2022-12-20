@@ -65,6 +65,7 @@ func dryrun() int {
 	// Config logger and storage
 	log.Color = true
 	log.Verbose = true
+	log.Prefix = fmt.Sprintf("[%s] ", opt.name)
 	storage.Concurrency = opt.concurrency
 	storage.Buckets = opt.buckets
 
