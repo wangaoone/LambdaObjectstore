@@ -13,6 +13,7 @@ var (
 	ErrInvalidChunkSize = errors.New("invalid chunk size")
 	ErrUnimplemented    = errors.New("unimplemented")
 	ErrRequestFailure   = errors.New("request failed")
+	ErrStoredTwice      = errors.New("chunk stored twice")
 	ErrChunkClosed      = errors.New("chunk closed")
 	ErrChunkStoreFailed = errors.New("failed to cache chunk")
 	ErrUnexpectedClose  = errors.New("chunk unexpected closed")
@@ -64,8 +65,11 @@ type PersistChunk interface {
 	// Size returns the size of the chunk.
 	Size() int64
 
-	// IsStored returns whether the chunk is stored.
+	// IsStored returns whether the chunk is fully stored.
 	IsStored() bool
+
+	// ByteStored returns how many bytes is stored.
+	BytesStored() int64
 
 	// Store stores the chunk by intercepting a stream.
 	Store(resp.AllReadCloser) (resp.AllReadCloser, error)

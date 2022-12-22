@@ -88,6 +88,7 @@ type Request struct {
 	Option         int64
 	RequestGroup   RequestGroup
 	PersistChunk   PersistChunk
+	PredictedDue   time.Duration
 
 	conn             Conn
 	streamingStarted bool
@@ -216,11 +217,11 @@ func (req *Request) PrepareForGet(conn Conn) {
 	req.responseTimeout = protocol.GetBodyTimeout(req.BodySize)
 }
 
-func (req *Request) ToCachedResponse() *Response {
+func (req *Request) ToCachedResponse(cached PersistChunk) *Response {
 	rsp := &Response{
 		Id:     req.Id,
 		Cmd:    req.Cmd,
-		cached: true,
+		cached: cached,
 		from:   "cached",
 	}
 	if req.RetCommand != "" {
@@ -382,8 +383,8 @@ func (req *Request) Abandon() error {
 		return err
 	}
 
-	// Try abandon streaming. Stream served from cache will not be abandoned for good throughput.
-	if rsp := req.getResponse(); rsp != nil && !rsp.IsAbandon() && !rsp.IsCached() {
+	// Try abandon streaming.
+	if rsp := req.getResponse(); rsp != nil && !rsp.IsAbandon() {
 		rsp.CancelFlush()
 	}
 	return nil

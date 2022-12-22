@@ -3,7 +3,6 @@ package storage
 import (
 	"bytes"
 	"compress/gzip"
-	"container/heap"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -20,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 	"github.com/kelindar/binary"
 	csync "github.com/mason-leap-lab/infinicache/common/sync"
+	"github.com/mason-leap-lab/infinicache/common/sync/heap"
 	"github.com/zhangjyr/hashmap"
 
 	mys3 "github.com/mason-leap-lab/infinicache/common/aws/s3"
@@ -151,7 +151,9 @@ func (s *LineageStorage) setWithOption(key string, chunk *types.Chunk, opt *type
 	// s.log.Debug("in mutex of setting key %v", key)
 
 	// Oversize check.
-	if updatedOpt, ok := s.helper.validate(chunk, opt); ok {
+	if opt != nil && opt.Sized {
+		// pass
+	} else if updatedOpt, ok := s.helper.validate(chunk, opt); ok {
 		opt = updatedOpt
 	} else {
 		return types.OpError(ErrOOStorage)
@@ -1334,7 +1336,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 	// Setup inputs for terms downloading.
 	more := true
 	ctxDone := ctx.Done()
-	cancelled := false
+	canceled := false
 	go func() {
 		defer close(inputs)
 
@@ -1344,7 +1346,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 				select {
 				case <-ctxDone:
 					more = false
-					cancelled = true // Flag terminated, wait for download consumes all scheduled. Then, the interrupted err will be returned.
+					canceled = true // Flag terminated, wait for download consumes all scheduled. Then, the interrupted err will be returned.
 					return
 				default:
 				}
@@ -1390,7 +1392,7 @@ func (s *LineageStorage) doRecoverObjects(ctx context.Context, tbds []*types.Chu
 		ctx := aws.BackgroundContext()
 		ctx = context.WithValue(ctx, &ContextKeyLog, s.log)
 		err := downloader.DownloadWithIterator(ctx, inputs)
-		if cancelled {
+		if canceled {
 			chanError <- ErrRecoveryInterrupted
 		} else if err != nil {
 			s.log.Error("error on download objects: %v", err)

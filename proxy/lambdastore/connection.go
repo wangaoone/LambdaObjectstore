@@ -437,7 +437,7 @@ func (conn *Connection) doneRequest(ins *Instance, req *types.Request, responded
 
 	// Nil response suggests an error without proper response. Error during tranmission response will be handled differently.
 	if req.PersistChunk != nil && !req.PersistChunk.IsStored() && !req.PersistChunk.IsClosed() {
-		conn.log.Warn("Detected unfulfilled persist chunk during %v", req)
+		conn.log.Warn("Detected unfulfilled persist chunk during %v, predicted due in: %v", req, req.PredictedDue)
 		// ASSERION: responded is not nil.
 		var err error
 		if responded != nil {
@@ -452,9 +452,9 @@ func (conn *Connection) doneRequest(ins *Instance, req *types.Request, responded
 			req.PersistChunk.CloseWithError(types.ErrUnexpectedClose)
 		}
 	}
-	if responded != nil {
-		promise.Recycle(responded)
-	}
+	// if responded != nil {
+	// 	promise.Recycle(responded)
+	// }
 
 	lm := ins.lm
 	if !conn.control && lm != nil && !conn.IsClosed() {
@@ -869,7 +869,7 @@ func (conn *Connection) pongHandler() {
 		return
 	}
 
-	validated, err := instance.TryFlagValidated(conn, sid, flags)
+	validated, _, err := instance.TryFlagValidated(conn, sid, flags)
 	if err != nil && err != ErrNotCtrlLink && err != ErrInstanceValidated {
 		conn.log.Warn("Discard rouge PONG(%v) for %d, current %v", conn, storeId, validated)
 		conn.Conn.Close() // Close connection normally, so lambda will close itself.
@@ -1047,7 +1047,7 @@ func (conn *Connection) setHandler(start time.Time) {
 	// 1. The request timeouts.
 	// 2. This is a repeated SET for persistence retrial (See cache/persist_chunk:Store()).
 	if counter == nil {
-		// conn.log.Warn("Request not found: %s, can be cancelled already", rsp.Id.ReqId)
+		// conn.log.Warn("Request not found: %s, can be canceled already", rsp.Id.ReqId)
 		// Set response
 		conn.setResponse(rsp)
 		return
